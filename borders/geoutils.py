@@ -74,17 +74,19 @@ def split_by_common_ways(borders: typing.List[Feature]) -> typing.List[Feature]:
     return borders
 
 
-def split_by_ballon(intersec: shapely.geometry.base.BaseMultipartGeometry, ballon: shapely.geometry.base.BaseGeometry):
-    if isinstance(intersec, shapely.geometry.GeometryCollection):
-        if isinstance(ballon, shapely.geometry.Polygon):
-            return [x for x in intersec.geoms if not isinstance(x, shapely.geometry.Point)]
+def split_by_ballon(intersec: shapely.geometry.base.BaseGeometry,
+                    ballon: shapely.geometry.base.BaseGeometry) -> shapely.geometry.base.BaseGeometry:
+    if isinstance(intersec, (shapely.geometry.GeometryCollection, shapely.geometry.base.BaseMultipartGeometry)):
         if isinstance(ballon, (shapely.geometry.MultiPolygon, shapely.geometry.GeometryCollection)):
             geom_by_ballon = defaultdict(shapely.geometry.LineString)
+            enums = list(enumerate(ballon.geoms))
             for geom in intersec.geoms:
-                for (ind, ballon_geom) in enumerate(ballon.geoms):
+                for (ind, ballon_geom) in enums:
                     if ballon_geom.contains(geom) and not isinstance(geom, shapely.geometry.Point):
                         geom_by_ballon[ind] = geom_by_ballon[ind].union(geom)
                         break
             return shapely.ops.cascaded_union([try_linemerge(x) for x in geom_by_ballon.values()])
+        if isinstance(ballon, shapely.geometry.Polygon):
+            return try_linemerge(intersec)
         print("Dupa totalna?")
     return intersec
