@@ -1,9 +1,12 @@
 import itertools
+import logging
 import typing
-from converters.feature import Feature
+from collections import defaultdict
+
 import shapely.geometry
 import shapely.ops
-import logging
+
+from converters.feature import Feature
 
 __log = logging.getLogger(__name__)
 
@@ -55,11 +58,11 @@ def split_by_common_ways(borders: typing.List[Feature]) -> typing.List[Feature]:
     for (border, other) in itertools.combinations(borders, 2):
         __log.debug("Processing border ({0}, {1})".format(borders.index(border), borders.index(other)))
         intersec = border.geometry.intersection(other.geometry)
+        intersec_buffered = border.geometry.buffer(0.0000001).intersection(other.geometry.buffer(0.0000001))
         if intersec.is_empty:
             continue  # nothing will change anyway
         if isinstance(intersec, shapely.geometry.GeometryCollection):
-            intersec = shapely.ops.cascaded_union(
-                [x for x in intersec.geoms if not isinstance(x, shapely.geometry.Point)])
+            return split_by_ballon(intersec, intersec_buffered)
         if isinstance(intersec, (shapely.geometry.Point, shapely.geometry.MultiPoint)):
             intersec = shapely.geometry.LineString()  # empty geometry
         intersec = try_linemerge(intersec)
@@ -67,3 +70,18 @@ def split_by_common_ways(borders: typing.List[Feature]) -> typing.List[Feature]:
         border.geometry = create_multi_string(intersec, border.geometry.difference(intersec))
         other.geometry = create_multi_string(intersec, other.geometry.difference(intersec))
     return borders
+
+
+def split_by_ballon(intersec: shapely.geometry.base.BaseMultipartGeometry, ballon: shapely.geometry.base.BaseGeometry):
+    if isinstance(ballon, shapely.geometry.Polygon):
+        return [x for x in intersec.geoms if not isinstance(x, shapely.geometry.Point)]
+    if isinstance(ballon, (shapely.geometry.MultiPolygon, shapely.geometry.GeometryCollection)):
+        geom_by_ballon = defaultdict(shapely.geometry.LineString)
+        for geom in intersec.geoms:
+            for (ind, ballon_geom) in enumerate(ballon.geoms):
+                if ballon_geom.contains(geom) and not isinstance(geom, shapely.geometry.Point):
+                    geom_by_ballon[ind] = geom_by_ballon[ind].union(geom)
+                    break
+        return shapely.ops.cascaded_union([shapely.ops.linemerge(x) for x in geom_by_ballon.values()])
+    print("Dupa totalna?")
+    return intersec
