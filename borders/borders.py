@@ -23,7 +23,10 @@ __log = logging.getLogger(__name__)
 
 @cachetools.func.ttl_cache(maxsize=128, ttl=600)
 def get_adm_border(terc: str) -> shapely.geometry.base.BaseGeometry:
-    return shapely.geometry.shape(GMINY_DICT[terc]['geometry'])
+    try:
+        return shapely.geometry.shape(GMINY_DICT[terc]['geometry'])
+    except KeyError:
+        raise KeyError("Gmina o kodzie {0} nieznaleziona w PRG".format(terc))
 
 
 TYPE_BBOX = typing.Tuple[float, float, float, float]
