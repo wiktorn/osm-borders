@@ -1,9 +1,11 @@
 import itertools
+import logging
 import typing
-from converters.feature import Feature
+
 import shapely.geometry
 import shapely.ops
-import logging
+
+from converters.feature import Feature
 
 __log = logging.getLogger(__name__)
 
@@ -21,8 +23,16 @@ def try_linemerge(obj: shapely.geometry.base.BaseGeometry) -> shapely.geometry.b
             and isinstance(obj, shapely.geometry.base.BaseMultipartGeometry) \
             and len(obj) > 1 \
             and not isinstance(obj, shapely.geometry.MultiPoint):
+        lines = [x for x in obj if not isinstance(x, shapely.geometry.Point)]
+        lines_by_start = dict((x.coords[0], x) for x in lines)
+        lines_by_end = dict((x.coords[-1], x) for x in lines)
         return shapely.ops.linemerge(
-            shapely.geometry.MultiLineString([x for x in obj if not isinstance(x, shapely.geometry.Point)]))
+            shapely.geometry.MultiLineString(
+                [x if (x.coords[-1] in lines_by_start or x.coords[0] in lines_by_end)
+                 else shapely.geometry.LineString(reversed(x.coords))
+                 for x in lines]
+            )
+        )
     return obj
 
 
