@@ -26,7 +26,8 @@ def get_adm_border(terc: str) -> shapely.geometry.base.BaseGeometry:
     try:
         return shapely.geometry.shape(GMINY_DICT[terc]['geometry'])
     except KeyError:
-        raise KeyError("Gmina o kodzie {0} nieznaleziona w PRG".format(terc))
+        candidates = [x for x in GMINY_DICT.keys() if x.startswith(terc[:-1])]
+        raise KeyError("Gmina o kodzie {0} nieznaleziona w PRG. Może jedna z: {1}".format(terc, ", ".join(candidates)))
 
 
 TYPE_BBOX = typing.Tuple[float, float, float, float]
