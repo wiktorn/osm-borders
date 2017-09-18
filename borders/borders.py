@@ -36,6 +36,7 @@ TYPE_BBOX = typing.Tuple[float, float, float, float]
 def geometry_as_geojson(o: shapely.geometry.base.BaseGeometry) -> str:
     return json.dumps(shapely.geometry.mapping(o))
 
+
 def divide_bbox(bbox: TYPE_BBOX) -> typing.List[TYPE_BBOX]:
     (minx, miny, maxx, maxy) = bbox
     # EPSG:2180
@@ -45,7 +46,7 @@ def divide_bbox(bbox: TYPE_BBOX) -> typing.List[TYPE_BBOX]:
     __PRECISION = 1000000
     __MAX_BBOX_X = int(0.03 * __PRECISION)
     __MAX_BBOX_Y = int(0.04 * __PRECISION)
-    return [
+    rv = [
         (x / __PRECISION,
          y / __PRECISION,
          min(x / __PRECISION + __MAX_BBOX_X, maxx),
@@ -53,11 +54,14 @@ def divide_bbox(bbox: TYPE_BBOX) -> typing.List[TYPE_BBOX]:
         for x in range(math.floor(minx * __PRECISION), math.ceil(maxx * __PRECISION), __MAX_BBOX_X * __PRECISION)
         for y in range(math.floor(miny * __PRECISION), math.ceil(maxy * __PRECISION), __MAX_BBOX_Y * __PRECISION)
         ]
+    __log.info("Split bbox to {0} parts".format(len(rv)))
+    return rv
 
 
 @cachetools.func.ttl_cache(maxsize=128, ttl=24 * 3600)
 def fetch_from_emuia_cached(bbox: TYPE_BBOX) -> str:
     try:
+        __log.info("Downloading BBOX: {0} from EMUiA".format(bbox))
         resp = requests.get("http://emuia1.gugik.gov.pl/wmsproxy/emuia/wms",
                         params={
                             "FORMAT": "application/vnd.google-earth.kml+xml",
@@ -96,14 +100,17 @@ def get_borders(terc: str,
                 do_clean_borders: bool = True) -> bytes:
     adm_bound = get_adm_border(terc)
     borders = []
+    __log.info("Downloading data from EMUiA")
     for bbox in divide_bbox(adm_bound.bounds):  # area we need to fetch from EMUiA
         borders.extend(fetch_from_emuia(bbox))
     wikidata = []
+    __log.info("Downloading data from Wikidata")
     try:
         wikidata = fetch_from_wikidata(terc)
     except Exception as e:
         # ignore any exceptions
         __log.warning("Exception during fetch from Wikidata: {0}", e, exc_info=(type(e), e, e.__traceback__))
+    __log.info("Processing data")
     return process(adm_bound = adm_bound,
                    borders = borders,
                    filter = filter,

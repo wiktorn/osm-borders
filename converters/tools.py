@@ -1,3 +1,4 @@
+import collections
 import logging
 import os
 import pickle
@@ -46,6 +47,7 @@ class CachedDictionary(typing.Generic[T]):
                 # monkey patch the instance
                 self.__getitem_monkey_patch = self._getitem___after
                 self.keys = self.keys_after
+                self.items = self.__items_after
                 # free context, as it will be no longer needed
                 self.func = None
                 self.lock = None
@@ -67,9 +69,23 @@ class CachedDictionary(typing.Generic[T]):
             # noinspection PyTypeChecker
             return None
 
-    def keys(self):
+    def keys(self) -> typing.Iterable[str]:
         self._monkey_patch()
         return self.keys()
 
     def keys_after(self) -> typing.Iterable[str]:
         return self.dct.keys()
+
+    def items(self) -> typing.ItemsView[str, T]:
+        self._monkey_patch()
+        return self.items()
+
+    def __items_after(self) -> typing.ItemsView[str, T]:
+        return self.dct.items()
+
+
+def groupby(lst: typing.Iterable, keyfunc=lambda x: x, valuefunc=lambda x: x):
+    rv = collections.defaultdict(list)
+    for i in lst:
+        rv[keyfunc(i)].append(valuefunc(i))
+    return rv

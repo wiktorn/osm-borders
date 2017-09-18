@@ -1,15 +1,14 @@
-import collections
-import functools
+import base64
 import io
 import logging
 import typing
 import zipfile
-from urllib.request import urlopen
 from xml.etree import ElementTree as ET
 
-from bs4 import BeautifulSoup
+import zeep
+from zeep.wsse.username import UsernameToken
 
-from .tools import CachedDictionary
+from .tools import CachedDictionary, groupby
 
 __log = logging.getLogger(__name__)
 
@@ -274,65 +273,89 @@ class UlicMultiEntry(object):
 TYPE_DICT_ENTRIES = typing.TypeVar('V', TercEntry, BasicEntry, SimcEntry, UlicMultiEntry)
 
 
-def _zip_read(url: str, fname: str):
-    dictionary_zip = zipfile.ZipFile(io.BytesIO(urlopen(url).read()))
-    return dictionary_zip.read(fname)
+def _zip_read(binary: bytes) -> bytes:
+    dictionary_zip = zipfile.ZipFile(io.BytesIO(binary))
+    dicname = [x for x in dictionary_zip.namelist() if x.endswith(".xml")][0]
+    return dictionary_zip.read(dicname)
 
 
 def _row_as_dict(elem: ET.Element):
     return dict(
-        (x.get('name').lower(), x.text.strip()) for x in elem.iter('col') if x.text
+        (x.tag.lower(), x.text.strip()) for x in elem.iter() if x.text
     )
 
 
-def _groupby(lst: typing.Iterable, keyfunc=lambda x: x, valuefunc=lambda x: x):
-    rv = collections.defaultdict(list)
-    for i in lst:
-        rv[keyfunc(i)].append(valuefunc(i))
-    return rv
+def _get_teryt_client():
+    __log.info("Connecting to TERYT web service")
+    wsdl = 'https://uslugaterytws1.stat.gov.pl/wsdl/terytws1.wsdl'
+    wsse = UsernameToken('osmaddrtools', '#06JWOWutt4')
+    return zeep.Client(wsdl=wsdl, wsse=wsse)
 
 
-@functools.lru_cache()
-def files():
-    soup = BeautifulSoup(urlopen("http://www.stat.gov.pl/broker/access/prefile/listPreFiles.jspa"), "html.parser")
-
-    return dict(
-        (
-            x + '.xml',
-            'http://www.stat.gov.pl/broker/access/prefile/' +
-            soup.find('td', text=x).parent.find_all('a')[1]['href']
-        ) for x in ('ULIC', 'TERC', 'SIMC', 'WMRODZ')
-    )
-
-
-def __get_dict(name: str, cls: typing.ClassVar) -> typing.Iterable[TYPE_DICT_ENTRIES]:
-    tree = ET.XML(_zip_read(files()[name], name))
+def __get_dict(fetcher: typing.Callable[[], bytes], cls: typing.ClassVar) -> typing.Iterable[TYPE_DICT_ENTRIES]:
+    tree = ET.fromstring(_zip_read(fetcher()))
     return (cls(_row_as_dict(x)) for x in tree.find('catalog').iter('row'))
 
 
+def __WMRODZ_binary() -> bytes:
+    client = _get_teryt_client()
+    data = client.service.PobierzDateAktualnegoKatSimc()
+    __log.info("Downloading WMRODZ dictionary")
+    dane = client.service.PobierzKatalogWMRODZ(data)
+    __log.info("Downloading WMRODZ dictionary - done")
+    return base64.decodebytes(dane.plik_zawartosc.encode('utf-8'))
+
+
 def __wmrodz_create() -> typing.Dict[str, str]:
-    return dict((x.rm, x.nazwa_rm) for x in __get_dict('WMRODZ.xml', BasicEntry))
+    return dict((x.rm, x.nazwa_rm) for x in __get_dict(__WMRODZ_binary, BasicEntry))
 
 
 wmrodz = CachedDictionary('osm_teryt_wmrodz_v1', __wmrodz_create)
 
 
+def __TERC_binary() -> bytes:
+    client = _get_teryt_client()
+    data = client.service.PobierzDateAktualnegoKatTerc()
+    __log.info("Downloading TERC dictionary")
+    dane = client.service.PobierzKatalogTERC(data)
+    __log.info("Downloading TERC dictionary - done")
+    return base64.decodebytes(dane.plik_zawartosc.encode('utf-8'))
+
+
 def __teryt_create() -> typing.Dict[str, TercEntry]:
-    return dict(((x.terc, x) for x in __get_dict('TERC.xml', TercEntry)))
+    return dict(((x.terc, x) for x in __get_dict(__TERC_binary, TercEntry)))
 
 
 teryt = CachedDictionary('osm_teryt_teryt_v1', __teryt_create)
 
 
+def __SIMC_binary() -> bytes:
+    client = _get_teryt_client()
+    data = client.service.PobierzDateAktualnegoKatSimc()
+    __log.info("Downloading SIMC dictionary")
+    dane = client.service.PobierzKatalogSIMC(data)
+    __log.info("Downloading SIMC dictionary - done")
+    return base64.decodebytes(dane.plik_zawartosc.encode('utf-8'))
+
+
 def __simc_create() -> typing.Dict[str, SimcEntry]:
-    return dict((x.sym, x) for x in __get_dict('SIMC.xml', SimcEntry))
+    return dict((x.sym, x) for x in __get_dict(__SIMC_binary, SimcEntry))
 
 
 simc = CachedDictionary('osm_teryt_simc_v1', __simc_create)
 
 
+def __ULIC_binary() -> bytes:
+    client = _get_teryt_client()
+    data = client.service.PobierzDateAktualnegoKatUlic()
+    __log.info("Downloading ULIC dictionary")
+    dane = client.service.PobierzKatalogULIC(data)
+    __log.info("Downloading ULIC dictionary - done")
+    return base64.decodebytes(dane.plik_zawartosc.encode('utf-8'))
+
+
 def __ulic_create() -> typing.Dict[str, UlicMultiEntry]:
-    grouped = _groupby(__get_dict('ULIC.xml', UlicEntry), lambda x: x.symul)
+    grouped = groupby(__get_dict(__ULIC_binary, UlicEntry), lambda x: x.symul)
     return dict((key, UlicMultiEntry.from_list(value)) for key, value in grouped.items())
 
 

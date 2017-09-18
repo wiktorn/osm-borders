@@ -3,9 +3,10 @@ import os
 from xml.sax.saxutils import quoteattr
 
 from flask import Flask, make_response as _make_response
-from flask import request
+from flask import request, redirect, url_for, render_template
 
 import borders.borders
+from converters import teryt
 
 app = Flask(__name__)
 
@@ -49,6 +50,25 @@ def get_gminy(terc):
     return resp
 
 
+@app.errorhandler(404)
+def page_not_found(error):
+    return redirect(url_for("list_all"))
+
+
+@app.route("/list/")
+def list_all():
+    return render_list(None)
+
+
+@app.route("/list/<terc>")
+def render_list(terc):
+    if terc:
+        items = [(k, v) for k, v in teryt.teryt.items() if k.startswith(terc) and len(k) > len(terc)]
+    else:
+        items = [(k, v) for k, v in teryt.teryt.items() if len(k) < 7]
+    return render_template('list.html', items=items, teryt=teryt.teryt)
+
+
 def report_exception(e):
     app.logger.error('{0}: {1}'.format(request.path, e), exc_info=(type(e), e, e.__traceback__))
     resp = make_response(
@@ -62,7 +82,7 @@ def report_exception(e):
     return resp
 
 
-if __name__ == '__main__':
+def start_rest_server():
     ADMINS = ['logi-osm@vink.pl']
     DEBUG = bool(os.environ.get('DEBUG', False))
     os.sys.stderr.write("Debug mode: {0}\n".format(DEBUG))
@@ -79,6 +99,10 @@ if __name__ == '__main__':
         app.logger.addHandler(mail_handler)
 
     if not DEBUG:
-        report_exception = app.errorhandler(Exception)(report_exception)
+        app.errorhandler(Exception)(report_exception)
 
     app.run(host='0.0.0.0', port=5002, debug=DEBUG)
+
+
+if __name__ == '__main__':
+    start_rest_server()

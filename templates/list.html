@@ -1,0 +1,101 @@
+<!doctype html>
+<html>
+<head>
+    <meta charset="UTF-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maxium-scale=1.0 user-scalable=no"/>
+
+    <link rel="stylesheet"
+          type="text/css"
+          href="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.7/css/bootstrap.min.css"
+          integrity="sha384-BVYiiSIFeK1dGmJRAkycuHAHRg32OmUcww7on3RYdg4Va+PmSTsz/K68vbdEjh4u"
+          crossorigin="anonymous"/>
+    <link rel="stylesheet"
+          type="text/css"
+          href="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.7/css/bootstrap-theme.min.css"
+          integrity="sha384-rHyoN1iRsVXV4nD0JutlnGaslCJuC7uwjduW9SVrLvRYooPp2bWYgmgJQIXwl/Sp"
+          crossorigin="anonymous"/>
+    <link rel="stylesheet"
+          type="text/css"
+          href="https://cdn.datatables.net/1.10.15/css/jquery.dataTables.min.css"
+          integrity="sha384-7aHcEDPYwGmKiybE/uc10TN0kjqd2f2v+pXK4KcagkbHi4Obwg0I5K7JfMWeZwYR"
+          crossorigin="anonymous"/>
+
+    <script src="http://ajax.googleapis.com/ajax/libs/jquery/1.9.1/jquery.min.js"
+            integrity="sha384-EaUkI/FiMJtEXWAl0dCczvbFvjfzsIF1UNKGJvu9p5JIG71Kih7/kQJvYbBL7HOn"
+            crossorigin="anonymous">
+    </script>
+    <script src="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.7/js/bootstrap.min.js"
+            integrity="sha384-Tc5IQib027qvyjSMfHjOMaLkfuWVxZxUPnCJA7l2mCWNIpG9mGCD8wGNIcPD7Txa"
+            crossorigin="anonymous">
+    </script>
+
+    <script type="text/javascript"
+            src="https://cdn.datatables.net/1.10.15/js/jquery.dataTables.min.js"
+            integrity="sha384-NHtbx1Hf6ctHNdZmU28YfhGjB63gcU1YU64ttM+c0RxMKNBj67j+N/axpqTfdffo"
+            crossorigin="anonymous">
+    </script>
+    <script type="text/javascript"
+            src="https://cdn.datatables.net/1.10.15/js/dataTables.bootstrap.min.js"
+            integrity="sha384-7PXRkl4YJnEpP8uU4ev9652TTZSxrqC8uOpcV1ftVEC7LVyLZqqDUAaq+Y+lGgr9"
+            crossorigin="anonymous">
+    </script>
+
+    <title>Granice gmin i miejscowości w Polsce</title>
+    <script type="text/javascript">
+        $(document).ready(function () {
+                $("#tabela").DataTable(
+                    {
+                        paging: false,
+                        processing: true
+                    });
+            }
+        );
+    </script>
+
+
+</head>
+<body>
+<table id="tabela"
+       class="table table-striped table-hover table-condensed"
+       data-order='[[2, "asc"], [3, "asc"], [0, "asc"]]'>
+    <thead>
+    <tr>
+        <th>Nazwa</th>
+        <th>Rodzaj</th>
+        <th>Województwo</th>
+        <th>Powiat</th>
+        <th>Kod TERC</th>
+        <th>Linki</th>
+    </tr>
+    </thead>
+    <tbody>
+    {% for terc, item in items %}
+        <tr>
+            <th>{{ item.nazwa }}</th>
+            <td>{{ item.rodz_nazwa }}</td>
+            <td>{{ teryt[item.woj].nazwa }}</td>
+            <td>{% if item.powiat %}{{ teryt[item.woj + item.powiat].nazwa }}{% endif %}</td>
+            <td>{{ terc }}</td>
+            <td>
+                <ul>
+                    {% if terc|length < 7 %}
+                        <li><a href="{{ terc }}">Przejdź do listy dla {{ item.rodz_nazwa }} {{ item.nazwa }} ({{ terc }})</a>
+                        </li>
+                    {% endif %}
+                    {% if terc|length == 4 %}
+                        <li><a href="../prg/gminy/{{ terc }}.osm">Granice gmin w powiecie (PRG)</a></li>
+                    {% endif %}
+                    {% if terc|length == 7 %}
+                        <li><a href="../{{ terc }}.osm">Granice miejscowości</a></li>
+                        <li><a href="../all/{{ terc }}.osm">Granice miejscowości i przysiółków</a></li>
+                        <li><a href="../nosplit/{{ terc }}.osm">Granice miejscowości(bez dzielenia linii)</a>
+                        </li>
+                    {% endif %}
+                </ul>
+            </td>
+        </tr>
+    {% endfor %}
+    </tbody>
+</table>
+</body>
+</html>

@@ -13,6 +13,8 @@ import requests
 
 from .tools import CachedDictionary
 
+__log = logging.getLogger(__name__)
+
 
 def get_prg_filename():
     resp = requests.get("http://www.codgik.gov.pl/index.php/darmowe-dane/prg.html")
@@ -25,7 +27,9 @@ def get_prg_filename():
 def download_prg_file() -> str:
     dir = tempfile.mkdtemp(prefix="prg")
     fname = os.path.join(dir, 'prg_file.zip')
+    __log.info("Downloading PRG archive")
     urllib.request.urlretrieve(get_prg_filename(), fname)
+    __log.info("Downloading PRG archive - done")
     return fname
 
 
@@ -56,9 +60,12 @@ def process_layer(layer_name: str, key: str, filepath: str) -> typing.Dict[str, 
         dirname = "/" + dirnames.pop()
         #layers = fiona.listlayers(dirname, "zip://" + filepath, encoding='cp1250')
         #logging.debug("Found layers: {0}".format(", ".join(layers)))
+        __log.info("Converting PRG data")
         with fiona.open(path=dirname, vfs="zip://" + filepath, layer=layer_name, mode="r", encoding='cp1250') as data:
             transform = functools.partial(pyproj.transform, pyproj.Proj(data.crs), pyproj.Proj(init="epsg:4326"))
-            return dict((x['properties'][key], project(transform, x)) for x in data)
+            rv = dict((x['properties'][key], project(transform, x)) for x in data)
+            __log.info("Converting PRG data - done")
+            return rv
 
 
 def get_layer(layer_name: str, key: str) -> typing.Dict[str, dict]:
