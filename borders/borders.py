@@ -15,14 +15,14 @@ from borders.geoutils import split_by_common_ways
 from borders.wikidata import fetch_from_wikidata, WikidataSimcEntry
 from converters.feature import ImmutableFeature, Feature
 from converters.kmlshapely import kml_to_shapely
-from converters.prg import gminy as GMINY_DICT
+from converters.prg import gminy
 from converters.teryt import simc as SIMC_DICT
 
 __log = logging.getLogger(__name__)
 
-
 @cachetools.func.ttl_cache(maxsize=128, ttl=600)
 def get_adm_border(terc: str) -> shapely.geometry.base.BaseGeometry:
+    GMINY_DICT = gminy()
     try:
         return shapely.geometry.shape(GMINY_DICT[terc]['geometry'])
     except KeyError:
@@ -436,6 +436,7 @@ class FeatureToOsm:
 
 
 def gminy_prg_as_osm(terc: str):
+    GMINY_DICT = gminy()
     borders = [Feature.from_geojson(GMINY_DICT[x]) for x in GMINY_DICT.keys() if x.startswith(terc)]
 
     for x in borders:

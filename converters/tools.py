@@ -1,4 +1,5 @@
 import collections
+import json
 import logging
 import os
 import pickle
@@ -8,7 +9,235 @@ import threading
 import time
 import typing
 
+import botocore.exceptions
+import tqdm
+from lz4.block import compress, decompress
+
 T = typing.TypeVar('T')
+
+
+class Cache(object):
+
+    def get(self, name: str):
+        raise NotImplementedError
+
+    def add(self, name: str, value: dict):
+        raise NotImplementedError
+
+    def delete(self, name: str):
+        raise NotImplementedError
+
+    def reload(self, contents: dict):
+        for key, value in contents.items():
+            self.add(key, value)
+
+    def __getitem__(self, item):
+        return self.get(item)
+
+    def __setitem__(self, key, value):
+        self.add(key, value)
+
+
+class CacheDriver:
+    def get_table(self, name: str) -> Cache:
+        raise NotImplementedError
+
+    def create(self, name: str) -> Cache:
+        raise NotImplementedError
+
+    def get_or_create(self, name: str) -> Cache:
+        raise NotImplementedError
+
+
+class ShelveCache(Cache):
+    def __init__(self, shlv):
+        self.shelve = shlv
+
+    def get(self, name: str) -> dict:
+        return self.shelve.get(str)
+
+    def add(self, name: str, value: dict):
+        self.shelve[str] = value
+
+    def delete(self, name: str):
+        del self.shelve[str]
+
+
+class ShelveCacheDriver(CacheDriver):
+    def __init__(self):
+        self.directory = os.path.join(tempfile.gettempdir(), "osm_cache")
+        os.makedirs(self.directory, mode=0o755, exist_ok=True)
+
+    def get_table(self, name: str) -> ShelveCache:
+        ret = shelve.open(os.path.join(self.directory, name), flag='w')
+        return ShelveCache(ret)
+
+    def create(self, name: str) -> ShelveCache:
+        ret = shelve.open(os.path.join(self.directory, name), flag='n')
+        return ShelveCache(ret)
+
+    def get_or_create(self, name: str) -> ShelveCache:
+        ret = shelve.open(os.path.join(self.directory, name), flag='c')
+        return ShelveCache(ret)
+
+
+class DynamoCache(Cache):
+    def __init__(self, table):
+        self._table = table
+
+    def get(self, name: str) -> dict:
+        return json.loads(
+            decompress(
+                    self._table.get_item(
+                        Key={
+                            'key':  name
+                        }
+                    )['Item']['value'].value).decode('utf-8')
+            )
+
+    def add(self, name: str, value: dict):
+        self._table.put_item(
+            Item={
+                'key':  name,
+                'value':
+                    compress(
+                        json.dumps(value).encode('utf-8'),
+                        mode='high_compression')
+            }
+        )
+
+    def delete(self, name: str):
+        self._table.delete_item(
+            Key={
+                'key': name
+                }
+
+        )
+
+    def reload(self, contents: dict):
+        old_capacity = self._table.provisioned_throughput['WriteCapacityUnits']
+        try:
+            if old_capacity < 10:
+                try:
+                    self._set_write_capacity(10)
+                except botocore.exceptions.ClientError:
+                    pass
+            with self._table.batch_writer() as batch:
+                for k, v in tqdm.tqdm(contents.items()):
+                    batch.put_item(
+                        Item={
+                            'key': k,
+                            'value': compress(
+                                json.dumps(v).encode('utf-8'),
+                                mode='high_compression')
+                        }
+                    )
+        finally:
+            try:
+                self._set_write_capacity(old_capacity)
+            except botocore.exceptions.ClientError:
+                pass
+
+    def _set_write_capacity(self, capacity):
+        self._table.meta.client.update_table(
+            TableName=self._table.name,
+            ProvisionedThroughput={
+                'ReadCapacityUnits': self._table.provisioned_throughput['ReadCapacityUnits'],
+                'WriteCapacityUnits': capacity
+            })
+
+
+class DynamoCacheDriver(CacheDriver):
+    def __init__(self, dynamodb):
+        self.dynamodb = dynamodb
+
+    def get_table(self, name: str) -> DynamoCache:
+        ret = self.dynamodb.Table(name)
+        self.dynamodb.meta.client.describe_table(TableName=name)['Table']
+        return DynamoCache(ret)
+
+    def create(self, name: str) -> DynamoCache:
+        ret = self.dynamodb.Table(name)
+        if ret.item_count > 0:
+            desc = self.dynamodb.meta.client.describe_table(TableName=name)['Table']
+            desc = dict(
+                (k,v) for (k,v) in desc.items() if k in
+                ('AttributeDefinitions', 'TableName', 'KeySchema',
+                 'LocalSecondaryIndexes', 'GlobalSecondaryIndexes',
+                 'ProvisionedThroughput', 'StreamSpecification')
+            )
+            desc['ProvisionedThroughput'] = dict(
+                (k, v) for k,v in desc['ProvisionedThroughput'].items() if k in
+                ('ReadCapacityUnits', 'WriteCapacityUnits')
+            )
+            ret.meta.client.delete_table(TableName=name)
+            waiter = self.dynamodb.meta.client.get_waiter('table_not_exists')
+            waiter.wait(TableName=name)
+            ret.meta.client.create_table(**desc)
+            waiter = self.dynamodb.meta.client.get_waiter('table_exists')
+            waiter.wait(TableName=name)
+        return DynamoCache(ret)
+
+    def get_or_create(self, name: str) -> DynamoCache:
+        ret = self.dynamodb.Table(name)
+        self.dynamodb.meta.client.describe_table(TableName=name)['Table']
+        return DynamoCache(ret)
+
+
+class CacheManager(object):
+    def __init__(self, cache_driver: CacheDriver):
+        self.cache_driver = cache_driver
+        meta = self.cache_driver.get_or_create('meta')
+
+        if not meta:
+            raise ValueError("Cache metadata not initialized")
+
+        self.meta = meta
+
+    def get_cache(self, name: str, version: int) -> Cache:
+        if name == "meta":
+            raise ValueError("Forbidden cache name: meta")
+
+        cache = self.meta.get(name)
+
+        if not cache:
+            return
+
+        if cache['status'] == 'ready' and cache['version'] >= version:
+            ret = self.cache_driver.get_table(name)
+            if not ret:
+                raise ValueError("Cache {0} not ready though metadata".format(name))
+            return ret
+
+        return
+
+    def create_cache(self, name: str) -> Cache:
+        if name == "meta":
+            raise ValueError("Forbidden cache name: meta")
+
+        self.meta.add(name, {
+            'status': 'creating',
+            'updated': 0
+        })
+        return self.cache_driver.create(name)
+
+    def mark_ready(self, name: str, version: str):
+        desc = self.meta.get(name)
+        desc['status'] = 'ready'
+        desc['updated'] = time.time()
+        desc['version'] = version
+        self.meta.add(name, desc)
+
+
+if os.environ.get('AWS_DEFAULT_REGION'):
+    import boto3
+    __cache_manager = CacheManager(DynamoCacheDriver(boto3.resource('dynamodb')))
+else:
+    __cache_manager = CacheManager(ShelveCacheDriver())
+
+
+def get_cache_manager():
+    return __cache_manager
 
 
 class CachedDictionary(typing.Generic[T]):

@@ -1,6 +1,8 @@
+import atexit
 import functools
 import logging
 import os
+import shutil
 import tempfile
 import typing
 import urllib.request
@@ -10,26 +12,67 @@ import bs4
 import fiona
 import pyproj
 import requests
+import time
+import tqdm
 
-from .tools import CachedDictionary
+from .tools import get_cache_manager
+
+__GMINY_CACHE_NAME = 'osm_prg_gminy_v1'
+__WOJEWODZTWA_CACHE_NAME = 'osm_prg_wojewodztwa_v1'
+
+
+def gminy():
+    return get_cache_manager().get_cache(__GMINY_CACHE_NAME)
+
+
+def wojewodztwa():
+    return get_cache_manager().get_cache(__WOJEWODZTWA_CACHE_NAME)
+
+
+def init():
+    cm = get_cache_manager()
+
+    foo, version = get_prg_filename()
+    gminy = cm.get_cache(__GMINY_CACHE_NAME, version)
+    if not gminy:
+        gminy = cm.create_cache(__GMINY_CACHE_NAME)
+        gminy.reload(get_layer('gminy', 'jpt_kod_je'))
+        cm.mark_ready(__GMINY_CACHE_NAME, version)
+
+    # wojewodztwa = cm.create_cache(__WOJEWODZTWA_CACHE_NAME)
+    # wojewodztwa.reload(get_layer('województwa', 'jpt_kod_je'))
+    # cm.mark_ready(__WOJEWODZTWA_CACHE_NAME)
+
 
 __log = logging.getLogger(__name__)
 
 
-def get_prg_filename():
+@functools.lru_cache(maxsize=1)
+def get_prg_filename() -> typing.Tuple[str, int]:
     resp = requests.get("http://www.codgik.gov.pl/index.php/darmowe-dane/prg.html")
     soup = bs4.BeautifulSoup(resp.text, "html.parser")
     link = soup.find("a", text="PRG – jednostki administracyjne")
-    return link.get('href')
+    version = link.parent.parent.find_all('td')[-1].text
+    return link.get('href'), time.mktime(time.strptime(version, '%d-%m-%Y'))
 
+
+class TqdmUpTo(tqdm.tqdm):
+    def update_to(self, b=1, bsize=1, tsize=None):
+        if tsize is not None:
+            self.total = tsize
+        self.update(b*bsize - self.n)
 
 @functools.lru_cache(maxsize=1)
 def download_prg_file() -> str:
+    #return "/tmp/prgxbdnufnb/prg_file.zip"
     dir = tempfile.mkdtemp(prefix="prg")
     fname = os.path.join(dir, 'prg_file.zip')
     __log.info("Downloading PRG archive")
-    urllib.request.urlretrieve(get_prg_filename(), fname)
+    url, version = get_prg_filename()
+    with TqdmUpTo(unit='B', unit_scale=True, miniters=1, desc=url) as t:
+        urllib.request.urlretrieve(url, filename=fname, reporthook=t.update_to)
     __log.info("Downloading PRG archive - done")
+    atexit.register(shutil.rmtree, dir)
     return fname
 
 
@@ -58,12 +101,10 @@ def process_layer(layer_name: str, key: str, filepath: str) -> typing.Dict[str, 
 
     with fiona.drivers():
         dirname = "/" + dirnames.pop()
-        #layers = fiona.listlayers(dirname, "zip://" + filepath, encoding='cp1250')
-        #logging.debug("Found layers: {0}".format(", ".join(layers)))
         __log.info("Converting PRG data")
         with fiona.open(path=dirname, vfs="zip://" + filepath, layer=layer_name, mode="r", encoding='cp1250') as data:
             transform = functools.partial(pyproj.transform, pyproj.Proj(data.crs), pyproj.Proj(init="epsg:4326"))
-            rv = dict((x['properties'][key], project(transform, x)) for x in data)
+            rv = dict((x['properties'][key], project(transform, x)) for x in tqdm.tqdm(data))
             __log.info("Converting PRG data - done")
             return rv
 
@@ -72,8 +113,3 @@ def get_layer(layer_name: str, key: str) -> typing.Dict[str, dict]:
     localfile = download_prg_file()
     return process_layer(layer_name, key, localfile)
 
-
-gminy = CachedDictionary("osm_prg_gminy_v1", functools.partial(get_layer, 'gminy', 'jpt_kod_je'))
-# schema file for powiaty is broken, doesn't parse right now
-# powiaty = CachedDictionary("osm-prg-gminy-v1", functools.partial(get_layer, 'powiaty', 'jpt_kod_je'))
-wojewodztwa = CachedDictionary("osm_prg_wojewodztwa_v1", functools.partial(get_layer, 'województwa', 'jpt_kod_je'))

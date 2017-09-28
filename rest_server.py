@@ -4,11 +4,15 @@ from xml.sax.saxutils import quoteattr
 
 from flask import Flask, make_response as _make_response
 from flask import request, redirect, url_for, render_template
+from flask_lambda import FlaskLambda
 
 import borders.borders
 from converters import teryt
 
-app = Flask(__name__)
+if os.environ.get('AWS_DEFAULT_REGION'):
+    app = FlaskLambda(__name__)
+else:
+    app = Flask(__name__)
 
 
 def make_response(ret, code):
