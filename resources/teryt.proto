@@ -1,0 +1,34 @@
+syntax = 'proto3';
+
+message TercEntry {
+    int32 woj = 1;
+    int32 powiat = 2;
+    int32 gmi = 3;
+    int32 rodz = 4;
+    string nazwadod = 5;
+    string nazwa = 6;
+}
+
+message SimcEntry {
+    int32 terc = 1;
+    int32 rm = 2;
+    string nazwa = 3;
+    int32 sym = 4;
+    int32 parent = 5;
+}
+
+message UlicEntry {
+    int32 sym = 1;
+    int32 symul = 2;
+    string cecha = 3;
+    string nazwa_1 = 4;
+    string nazwa_2 = 5;
+    int32 terc = 6;
+}
+
+message UlicMultiEntry {
+    int32 symul = 1;
+    string cecha = 2;
+    string nazwa = 3;
+    repeated UlicEntry entries = 4;
+}

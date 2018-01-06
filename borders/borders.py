@@ -23,9 +23,10 @@ __log = logging.getLogger(__name__)
 @cachetools.func.ttl_cache(maxsize=128, ttl=600)
 def get_adm_border(terc: str) -> shapely.geometry.base.BaseGeometry:
     GMINY_DICT = gminy()
-    try:
-        return shapely.geometry.shape(GMINY_DICT[terc]['geometry'])
-    except KeyError:
+    geojson = GMINY_DICT[terc]
+    if geojson:
+        return shapely.geometry.shape(geojson['geometry'])
+    else:
         candidates = [x for x in GMINY_DICT.keys() if x.startswith(terc[:-1])]
         raise KeyError("Gmina o kodzie {0} nieznaleziona w PRG. Może jedna z: {1}".format(terc, ", ".join(candidates)))
 
@@ -125,7 +126,7 @@ def clean_borders(borders: typing.List[Feature], do_clean: bool = True) -> None:
         parent_id = border.tags.get('IDENTYFIKATOR_NADRZEDNEJ')
         emuia_level = 10 if parent_id else 8
 
-        simc_entry = SIMC_DICT.get(simc_code)
+        simc_entry = SIMC_DICT().get(simc_code)
         if not simc_entry:
             __log.error(
                 "No entry in TERYT dictionary for SIMC: {0}, name: {1}".format(simc_code, border.tags.get('NAZWA')))
@@ -144,7 +145,7 @@ def clean_borders(borders: typing.List[Feature], do_clean: bool = True) -> None:
                 if simc_entry.parent != parent_border.tags.get('TERYT_MIEJSCOWOSCI'):
                     fixme.append("Different parents. In EMUiA it is teryt:simc: {0}, name: {1}".format(
                         simc_entry.parent,
-                        SIMC_DICT[simc_entry.parent].nazwa))
+                        SIMC_DICT()[simc_entry.parent].nazwa))
             except IndexError:
                 fixme.append("Missing parent border: {0}".format(parent_id))
 
@@ -170,7 +171,7 @@ def clean_borders(borders: typing.List[Feature], do_clean: bool = True) -> None:
         if emuia_level == 8 and simc_level == 10:
             fixme.append("TERC points this as part of teryt:simc={0}, name={1}".format(
                 simc_entry.parent,
-                SIMC_DICT[simc_entry.parent].nazwa
+                SIMC_DICT()[simc_entry.parent].nazwa
             ))
             level = emuia_level
             try:

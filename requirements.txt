@@ -5,10 +5,13 @@ cachetools
 flask
 flask-lambda
 fiona
+geobuf
 lz4
 overpy
+protobuf
 pyproj
 requests
 Shapely
+timeout-decorator
 tqdm
 zeep

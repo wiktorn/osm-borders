@@ -2,3 +2,4 @@ package.zip
 amazon/.terraform
 amazon/terraform.tfstate*
 **/__pycache__
+.idea

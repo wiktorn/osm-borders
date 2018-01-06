@@ -8,11 +8,28 @@ data "aws_iam_policy_document" "osm_apps_lambda_policy_document_ro" {
     actions = [
       "dynamodb:GetItem",
       "dynamodb:DescribeTable",
+      "dynamodb:Scan",
     ]
     resources = [
       "${module.osm_prg_gminy_dict.dynamo_table_arn}",
       "${module.osm_prg_wojewodztwa_dict.dynamo_table_arn}",
       "${module.osm_cache_meta_dict.dynamo_table_arn}",
+      "${module.osm_teryt_wmrodz_dict.dynamo_table_arn}",
+      "${module.osm_teryt_teryt_dict.dynamo_table_arn}",
+      "${module.osm_teryt_simc_dict.dynamo_table_arn}",
+      "${module.osm_teryt_ulic_dict.dynamo_table_arn}",
+    ]
+  }
+  statement {
+    effect = "Allow"
+    actions = [
+      "dynamodb:GetItem",
+      "dynamodb:DescribeTable",
+      "dynamodb:Scan",
+      "dynamodb:PutItem",
+    ]
+    resources = [
+      "${module.osm_prg_gminy_cache.dynamo_ouput_cache_arn}",
     ]
   }
 }
@@ -32,6 +49,11 @@ data "aws_iam_policy_document" "osm_apps_lambda_policy_document_rw" {
       "${module.osm_prg_gminy_dict.dynamo_table_arn}",
       "${module.osm_prg_wojewodztwa_dict.dynamo_table_arn}",
       "${module.osm_cache_meta_dict.dynamo_table_arn}",
+      "${module.osm_teryt_wmrodz_dict.dynamo_table_arn}",
+      "${module.osm_teryt_teryt_dict.dynamo_table_arn}",
+      "${module.osm_teryt_simc_dict.dynamo_table_arn}",
+      "${module.osm_teryt_ulic_dict.dynamo_table_arn}",
+
     ]
   }
 }
@@ -70,6 +92,24 @@ resource "aws_iam_role_policy" "osm_apps_lambda_iam_dynamo_ro" {
   policy = "${data.aws_iam_policy_document.osm_apps_lambda_policy_document_ro.json}"
 }
 
+data "aws_iam_policy_document" "allow_tracing" {
+    statement {
+      actions = [
+        "logs:PutLogEvents",
+        "logs:CreateLogStream",
+        "logs:CreateLogGroup",
+        "logs:DescribeLogStreams"
+      ],
+      resources = ["arn:aws:logs:*:*:*"],
+      effect = "Allow"
+    }
+}
+resource "aws_iam_role_policy" "osm_apps_lambda_iam_trace" {
+  role = "${aws_iam_role.osm_apps_lambda_iam.id}"
+  policy = "${data.aws_iam_policy_document.allow_tracing.json}"
+}
+
+
 resource "aws_iam_user" "osm_borders_dynamo_rw" {
   name = "osm_borders_lambda"
   path = "/osm/osm-borders/"
@@ -100,12 +140,14 @@ resource "aws_lambda_function" "osm_borders_lambda" {
 
   handler           = "rest_server.app"
   source_code_hash  = "${base64sha256(file("../package.zip"))}"
-  memory_size		= 128
+  memory_size		= 1024
   runtime           = "python3.6"
+  timeout = 300
 
   environment {
     variables {
       foo   = "bar"
+      USE_AWS = "true"
     }
   }
   depends_on = ["null_resource.build_lambda"]
@@ -117,6 +159,7 @@ resource "aws_lambda_permission" "osm_borders_lambda_permissions" {
   function_name = "${aws_lambda_function.osm_borders_lambda.function_name}"
   statement_id = "AllowExecutionFromAPIGateway"
 }
+
 
 resource "aws_api_gateway_rest_api" "osm_borders_api" {
   name = "osm_borders"
@@ -140,6 +183,9 @@ resource "aws_api_gateway_method" "osm_borders_api_method" {
   http_method = "GET"
   resource_id = "${aws_api_gateway_resource.osm_borders_terc_api_resource.id}"
   rest_api_id = "${aws_api_gateway_rest_api.osm_borders_api.id}"
+  request_parameters {
+    "method.request.header.host" = true
+  }
 }
 
 resource "aws_api_gateway_integration" "osm_borders_api_integration" {
@@ -149,6 +195,53 @@ resource "aws_api_gateway_integration" "osm_borders_api_integration" {
   integration_http_method = "POST"
   type ="AWS_PROXY"
   uri = "${aws_lambda_function.osm_borders_lambda.invoke_arn}"
+  request_parameters {
+    "integration.request.header.host" = "method.request.header.host"
+    "integration.request.header.x_forwarded_port" = "'80'"
+    "integration.request.header.x_forwarded_proto" = "'http'"
+  }
+
+  connection {timeout = "300"}
+}
+
+resource "aws_api_gateway_method_settings" "osm_borders_method_settings" {
+  rest_api_id = "${aws_api_gateway_rest_api.osm_borders_api.id}"
+  stage_name = "${aws_api_gateway_deployment.osm_borders_deployment.stage_name}"
+  method_path = "${aws_api_gateway_resource.osm_borders_terc_api_resource.path_part}/${aws_api_gateway_method.osm_borders_api_method.http_method}"
+
+  settings {
+    logging_level = "INFO"
+    throttling_rate_limit = "2"
+    throttling_burst_limit = "10"
+  }
+}
+
+resource "aws_api_gateway_account" "osm_api_gateway_account" {
+  cloudwatch_role_arn = "${aws_iam_role.cloudwatch_log_role.arn}"
+}
+
+resource "aws_iam_role" "cloudwatch_log_role" {
+  name = "cloudwatch_log"
+  assume_role_policy = <<EOF
+{
+    "Version": "2012-10-17",
+    "Statement": [
+      {
+        "Sid": "",
+        "Effect": "Allow",
+        "Principal": {
+          "Service": "apigateway.amazonaws.com"
+        },
+        "Action": "sts:AssumeRole"
+      }
+    ]
+  }
+EOF
+}
+
+resource "aws_iam_role_policy_attachment" "cloudwatch_log" {
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonAPIGatewayPushToCloudWatchLogs"
+  role = "${aws_iam_role.cloudwatch_log_role.name}"
 }
 
 resource "aws_api_gateway_deployment" "osm_borders_deployment" {
@@ -166,9 +259,34 @@ module "osm_prg_gminy_dict" {
   name = "osm_prg_gminy_v1"
 }
 
+module "osm_prg_gminy_cache" {
+  source = "./output_cache"
+  name = "osm_prg_gminy_cache_v1"
+}
+
 module "osm_prg_wojewodztwa_dict" {
   source = "./dynamo_cache"
   name = "osm_prg_wojewodztwa_v1"
+}
+
+module "osm_teryt_wmrodz_dict" {
+  source = "./dynamo_cache"
+  name = "osm_teryt_wmrodz_v1"
+}
+
+module "osm_teryt_simc_dict" {
+  source = "./dynamo_cache"
+  name = "osm_teryt_simc_v1"
+}
+
+module "osm_teryt_teryt_dict" {
+  source = "./dynamo_cache"
+  name = "osm_teryt_teryt_v1"
+}
+
+module "osm_teryt_ulic_dict" {
+  source = "./dynamo_cache"
+  name = "osm_teryt_ulic_v1"
 }
 
 module "osm_cache_meta_dict" {
