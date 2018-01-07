@@ -144,7 +144,6 @@ class DynamoCache(Cache):
         self.serializer = serializer
 
     def get(self, name: str, default: dict = None) -> typing.Optional[dict]:
-        print("Accessing key: %s from table: %s" % (name, self._table))
         self._logger.info("Accessing key: %s from table: %s", name, self._table)
         ret = self._table.get_item(
             Key={
