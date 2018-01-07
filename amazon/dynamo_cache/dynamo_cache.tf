@@ -3,7 +3,9 @@ variable "name" {}
 
 output "dynamo_table_arn" {
   value = "${aws_dynamodb_table.table.arn}"
+
 }
+
 
 resource  "aws_dynamodb_table" "table" {
   name = "${var.name}"

@@ -1,6 +1,7 @@
 import collections
 import dbm
 import json
+import logging
 import os
 import shelve
 import tempfile
@@ -136,11 +137,15 @@ class ShelveCacheDriver(CacheDriver):
 
 
 class DynamoCache(Cache):
+    _logger = logging.getLogger(__name__)
+
     def __init__(self, table, serializer: Serializer):
         self._table = table
         self.serializer = serializer
 
     def get(self, name: str, default: dict = None) -> typing.Optional[dict]:
+        print("Accessing key: %s from table: %s" % (name, self._table))
+        self._logger.info("Accessing key: %s from table: %s", name, self._table)
         ret = self._table.get_item(
             Key={
                 'key': name

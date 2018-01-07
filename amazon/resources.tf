@@ -74,11 +74,11 @@ resource "aws_s3_bucket" "lambda_repo" {
   acl = "private"
 }
 
-resource "aws_s3_bucket_object" "osm_borders_package" {
+resource "aws_s3_bucket_object" "osm_borders_package_rest" {
   bucket = "${aws_s3_bucket.lambda_repo.id}"
-  key = "osm_borders_package"
-  source = "../package.zip"
-  etag = "${md5(file("../package.zip"))}"
+  key = "osm_borders_package_rest"
+  source = "../package_rest.zip"
+  etag = "${md5(file("../package_rest.zip"))}"
   depends_on = ["null_resource.build_lambda"]
 }
 
@@ -131,16 +131,15 @@ resource "aws_iam_access_key" "osm_borders_lambda_access_key" {
   secret = ${aws_iam_access_key.osm_borders_lambda_access_key.secret}
 */
 
-resource "aws_lambda_function" "osm_borders_lambda" {
-/*  filename          = "../package.zip"*/
-  s3_bucket = "${aws_s3_bucket_object.osm_borders_package.bucket}"
-  s3_key = "${aws_s3_bucket_object.osm_borders_package.key}"
-  function_name     = "osm-borders"
+resource "aws_lambda_function" "osm_borders_lambda_rest" {
+  s3_bucket = "${aws_s3_bucket_object.osm_borders_package_rest.bucket}"
+  s3_key = "${aws_s3_bucket_object.osm_borders_package_rest.key}"
+  function_name     = "osm-borders-rest"
   role              = "${aws_iam_role.osm_apps_lambda_iam.arn}"
 
-  handler           = "rest_server.app"
-  source_code_hash  = "${base64sha256(file("../package.zip"))}"
-  memory_size		= 1024
+  handler           = "rest_endpoint.app"
+  source_code_hash  = "${base64sha256(file("../package_rest.zip"))}"
+  memory_size		= 128
   runtime           = "python3.6"
   timeout = 300
 
@@ -156,7 +155,7 @@ resource "aws_lambda_function" "osm_borders_lambda" {
 resource "aws_lambda_permission" "osm_borders_lambda_permissions" {
   action = "lambda:invokeFunction"
   principal = "apigateway.amazonaws.com"
-  function_name = "${aws_lambda_function.osm_borders_lambda.function_name}"
+  function_name = "${aws_lambda_function.osm_borders_lambda_rest.function_name}"
   statement_id = "AllowExecutionFromAPIGateway"
 }
 
@@ -194,7 +193,7 @@ resource "aws_api_gateway_integration" "osm_borders_api_integration" {
   http_method = "${aws_api_gateway_method.osm_borders_api_method.http_method}"
   integration_http_method = "POST"
   type ="AWS_PROXY"
-  uri = "${aws_lambda_function.osm_borders_lambda.invoke_arn}"
+  uri = "${aws_lambda_function.osm_borders_lambda_rest.invoke_arn}"
   request_parameters {
     "integration.request.header.host" = "method.request.header.host"
     "integration.request.header.x_forwarded_port" = "'80'"
@@ -238,6 +237,47 @@ resource "aws_iam_role" "cloudwatch_log_role" {
   }
 EOF
 }
+
+resource "aws_sns_topic" "osm_api_osm_borders_topic" {
+  name = "osm_api_osm_borders_topic"
+}
+
+resource "aws_sns_topic_subscription" "osm_api_osm_borders_subscription" {
+  endpoint = "${aws_lambda_function.osm_borders_lambda_fetcher.arn}"
+  protocol = "lambda"
+  topic_arn = "${aws_sns_topic.osm_api_osm_borders_topic.arn}"
+}
+
+resource "aws_s3_bucket_object" "osm_borders_package_fetcher" {
+  bucket = "${aws_s3_bucket.lambda_repo.id}"
+  key = "osm_borders_package_fetcher"
+  source = "../package_fetcher.zip"
+  etag = "${md5(file("../package_fetcher.zip"))}"
+  depends_on = ["null_resource.build_lambda"]
+}
+
+resource "aws_lambda_function" "osm_borders_lambda_fetcher" {
+  s3_bucket = "${aws_s3_bucket_object.osm_borders_package_fetcher.bucket}"
+  s3_key = "${aws_s3_bucket_object.osm_borders_package_fetcher.key}"
+  function_name     = "osm-borders-fetcher"
+  role              = "${aws_iam_role.osm_apps_lambda_iam.arn}"
+
+  handler           = "fetcher.app"
+  source_code_hash  = "${base64sha256(file("../package_fetcher.zip"))}"
+  memory_size		= 1204
+  runtime           = "python3.6"
+  timeout = 300
+
+  environment {
+    variables {
+      OSM_BORDERS_CACHE_TABLE = "${module.osm_prg_gminy_cache.name}"
+      OSM_BORDERS_SNS_TOPIC_ARN = "${aws_sns_topic.osm_api_osm_borders_topic.arn}"
+      USE_AWS = "true"
+    }
+  }
+  depends_on = ["null_resource.build_lambda"]
+}
+
 
 resource "aws_iam_role_policy_attachment" "cloudwatch_log" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonAPIGatewayPushToCloudWatchLogs"

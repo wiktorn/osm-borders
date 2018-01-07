@@ -1,0 +1,7 @@
+boto3
+flask
+flask-lambda
+lz4
+protobuf
+tqdm
+zeep

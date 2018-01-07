@@ -230,10 +230,10 @@ class TercEntry(object):
     @staticmethod
     def from_dict(dct: dict) -> 'TercEntry':
         return TercEntry(**{
-            'woj': "{0:02}".format(dct['woj']),
-            'powiat': "{0:02}".format(dct['powiat']) if dct['powiat'] else '',
-            'gmi': "{0:02}".format(dct['gmi']) if dct['gmi'] else '',
-            'rodz': "{0:1}".format(dct['rodz']) if dct['rodz'] else '',
+            'woj': dct['woj'],
+            'powiat': dct['powiat'] if dct['powiat'] else '',
+            'gmi': dct['gmi'] if dct['gmi'] else '',
+            'rodz': dct['rodz'] if dct['rodz'] else '',
             'nazwadod': dct['nazwadod'],
             'nazwa': dct['nazwa']
         })
@@ -277,11 +277,11 @@ class SimcEntry(object):
     @staticmethod
     def from_dict(dct: dict) -> 'SimcEntry':
         ret = SimcEntry()
-        ret.terc = "{0:07}".format(dct['terc'])
-        ret.rm_id = "{0:2}".format(dct.get('rm', 0))
+        ret.terc = dct['terc']
+        ret.rm_id = dct.get('rm', 0)
         ret.nazwa = dct['nazwa']
-        ret.sym = "{0:07}".format(dct['sym'])
-        ret.parent = "{0:07}".format(dct['parent']) if 'parent' in dct else None
+        ret.sym = dct['sym']
+        ret.parent = dct['parent'] if 'parent' in dct else None
         return ret
 
     @property
@@ -372,6 +372,11 @@ class UlicEntry(object):
         #    dct.get('rodz_gmi'), "City terc code: {0} != {1} (terc code from ulic".format(
         #    self.terc, dct.get('woj') + dct.get('pow') + dct.get('gmi') + dct.get('rodz_gmi'))
 
+    def __str__(self):
+        return "UlicEntry({{sym: {}, symul: {}, cecha_orig: {}, nazwa_1: {}, nazwa_2: {}, terc: {}}})".format(
+            self.sym, self.symul, self.cecha_orig, self.nazwa_1, self.nazwa_2, self.terc
+        )
+
     @property
     def cache_key(self):
         return self.symul
@@ -399,10 +404,10 @@ class UlicEntry(object):
 
     @staticmethod
     def from_dict(dct: dict) -> 'UlicEntry':
-        terc = "{0:07}".format(dct['terc'])
+        terc = dct['terc']
         return UlicEntry({
-            'sym': "{0:07}".format(dct['sym']),
-            'sym_ul': "{0:05}".format(dct['symul']),
+            'sym': dct['sym'],
+            'sym_ul': dct['symul'],
             'cecha': dct['cecha'],
             'nazwa_1': dct['nazwa_1'],
             'nazwa_2': nvl(dct.get('nazwa_2'), ''),
@@ -414,11 +419,13 @@ class UlicEntry(object):
 
     @staticmethod
     def from_update(dct: dict) -> 'UlicEntry':
-        return UlicEntry(
+        ret = UlicEntry(
             dict(
                 (UlicEntry._update_to_init_map.get(k, k), v) for (k, v) in dct.items()
             )
         )
+        print("From dictionary: {} created {}".format(dct, str(ret)))
+        return ret
 
     @property
     def solr_json(self) -> tuple:
@@ -584,7 +591,7 @@ class BaseTerytCache(typing.Generic[T]):
         try:
             return self._get_cache(self.cache_version())
         except CacheExpired:
-            cache_version = get_cache_manager().get_version(self.path)
+            cache_version = get_cache_manager().version(self.path)
             current_version = self.cache_version()
             self._cache_update(_int_to_datetime(cache_version), _int_to_datetime(current_version))
             return self.get()
@@ -637,13 +644,7 @@ class BaseTerytCache(typing.Generic[T]):
                 raise ValueError("Unkown TypKorekty: %s, expected one of: %s.",
                                  operation,
                                  ", ".join(self.change_handlers.keys()))
-            handler(cache, zmiana)
-
-    @classmethod
-    def register_handler(cls, operation: str):
-        def _decorator_function(handler: typing.Callable[[Cache, Element], None]):
-            cls.change_handlers[operation] = handler
-        return _decorator_function
+            handler(self, cache, zmiana)
 
     def _real_version_call(self) -> datetime.date:
         raise NotImplementedError
@@ -656,10 +657,10 @@ class BaseTerytCache(typing.Generic[T]):
 
 
 class SimcCache(BaseTerytCache):
+
     def __init__(self):
         super(SimcCache, self).__init__(TERYT_SIMC_DB, SimcEntry, SimcEntry_pb)
 
-    @BaseTerytCache.register_handler('D')
     def _handle_d(self, cache: Cache[SimcEntry], obj: Element):
         """
         D - dopisanie nowej miejscowości
@@ -671,7 +672,6 @@ class SimcCache(BaseTerytCache):
         new = SimcEntry.from_dict(update_record_to_dict(obj, 'Po'))
         cache.add(new.sym, new)
 
-    @BaseTerytCache.register_handler('U')
     def _handle_u(self, cache: Cache[SimcEntry], obj: Element):
         """
         U - usunięcie istniejącej miejscowości
@@ -680,7 +680,6 @@ class SimcCache(BaseTerytCache):
         old = SimcEntry.from_dict(update_record_to_dict(obj, 'Przed'))
         cache.delete(old.sym)
 
-    @BaseTerytCache.register_handler('Z')
     def _handle_z(self, cache: Cache[SimcEntry], obj: Element):
         """
             Z - zmiana atrybutów dla istniejącej miejscowości
@@ -701,7 +700,6 @@ class SimcCache(BaseTerytCache):
             # TODO: issue warning
             raise ValueError("Modification of non-existing record")
 
-    @BaseTerytCache.register_handler('P')
     def _handle_p(self, cache: Cache[SimcEntry], obj: Element):
         """
             P - przeniesienie miejscowości do innej jednostki administracyjnej (województwa, powiatu, gminy)
@@ -713,6 +711,14 @@ class SimcCache(BaseTerytCache):
         """
         self._handle_z(cache, obj)
 
+    change_handlers = {
+        'D': _handle_d,
+        'U': _handle_u,
+        'Z': _handle_z,
+        'P': _handle_p,
+    }
+
+
     def _real_version_call(self) -> datetime.date:
         return _get_teryt_client().service.PobierzDateAktualnegoKatSimc()
 
@@ -720,7 +726,7 @@ class SimcCache(BaseTerytCache):
         return _get_teryt_client().service.PobierzKatalogSIMC(version)
 
     def _get_update_real_call(self, start: datetime.date, end: datetime.date): # TODO: return type
-        raise _get_teryt_client().service.PobierzZmianySimcUrzedowy(start, end)
+        return _get_teryt_client().service.PobierzZmianySimcUrzedowy(start, end)
 
 @functools.lru_cache(maxsize=1)
 def simc() -> Cache[SimcEntry]:
@@ -731,7 +737,6 @@ class TerytCache(BaseTerytCache):
     def __init__(self):
         super(TerytCache, self).__init__(TERYT_TERYT_DB, TercEntry, TercEntry_pb)
 
-    @BaseTerytCache.register_handler('D')
     def _handle_d(self, cache: Cache[TercEntry], obj: Element):
         """
         D - dopisanie nowej jednostki
@@ -743,7 +748,6 @@ class TerytCache(BaseTerytCache):
         new = TercEntry.from_dict(update_record_to_dict(obj, 'Po'))
         cache.add(new.terc, new)
 
-    @BaseTerytCache.register_handler('U')
     def _handle_u(self, cache: Cache[TercEntry], obj: Element):
         """
         U - usunięcie istniejącej jednostki i dołączenie do innej
@@ -752,7 +756,6 @@ class TerytCache(BaseTerytCache):
         old = TercEntry.from_dict(update_record_to_dict(obj, 'Przed'))
         cache.delete(old.terc)
 
-    @BaseTerytCache.register_handler('M')
     def _handle_m(self, cache: Cache[TercEntry], obj: Element):
         """
             M - zmiana nazwy lub/i identyfikatora
@@ -773,6 +776,12 @@ class TerytCache(BaseTerytCache):
             # TODO: issue warning
             raise ValueError("Modification of non-existing record")
 
+    change_handlers = {
+        'D': _handle_d,
+        'U': _handle_u,
+        'M': _handle_m,
+    }
+
     def _real_version_call(self) -> datetime.date:
         return _get_teryt_client().service.PobierzDateAktualnegoKatTerc()
 
@@ -780,18 +789,18 @@ class TerytCache(BaseTerytCache):
         return _get_teryt_client().service.PobierzKatalogTERC(version)
 
     def _get_update_real_call(self, start: datetime.date, end: datetime.date): # TODO: return type
-        raise _get_teryt_client().service.PobierzZmianyTercUrzedowy(start, end)
+        return _get_teryt_client().service.PobierzZmianyTercUrzedowy(start, end)
 
 
 @functools.lru_cache(maxsize=1)
 def teryt() -> Cache[TercEntry]:
     return TerytCache().get()
 
+
 class UlicCache(BaseTerytCache):
     def __init__(self):
         super(UlicCache, self).__init__(TERYT_ULIC_DB, UlicMultiEntry, UlicMultiEntry_pb)
 
-    @BaseTerytCache.register_handler('D')
     def _handle_d(self, cache: Cache[UlicMultiEntry], obj: Element):
         """
             D - dopisanie nowej ulicy
@@ -810,7 +819,6 @@ class UlicCache(BaseTerytCache):
         else:
             cache.add(to.symul, UlicMultiEntry(to))
 
-    @BaseTerytCache.register_handler('M')
     def _handle_m(self, cache: Cache[UlicMultiEntry], obj: Element):
         """
             M - zmiana parametrów ulicy
@@ -821,7 +829,10 @@ class UlicCache(BaseTerytCache):
         :return:
         """
         old = UlicEntry.from_update(update_record_to_dict(obj, 'Przed'))
-        cache_entry = cache.get(old.symul)
+        if old.symul:
+            cache_entry = cache.get(old.symul)
+        else:
+            cache_entry = None
         if cache_entry:
             ulic_entry = cache_entry.get_by_sym(old.sym)
             ulic_entry.update_from(update_record_to_dict(obj, 'Po'))
@@ -841,9 +852,8 @@ class UlicCache(BaseTerytCache):
             cache.add(cache_entry.symul, cache_entry)
         else:
             # TODO: issue warning
-            raise ValueError("Modification of non-existing record: %s", old.symul)
+            raise ValueError("Modification of non-existing record: %s", str(old))
 
-    @BaseTerytCache.register_handler('U')
     def _handle_u(self, cache: Cache[UlicMultiEntry], obj: Element):
         """
             U - usunięcie istniejącej ulicy
@@ -861,7 +871,6 @@ class UlicCache(BaseTerytCache):
         else:
             cache.add(cache_entry.symul, cache_entry)
 
-    @BaseTerytCache.register_handler('Z')
     def _handle_z(self, cache: Cache[UlicMultiEntry], obj: Element):
         old = UlicEntry.from_update(update_record_to_dict(obj, 'Przed'))
         cache_entry = cache.get(old.symul)
@@ -874,6 +883,13 @@ class UlicCache(BaseTerytCache):
         cache_entry.nazwa = ulic_entry.nazwa
         cache.add(cache_entry.symul, cache_entry)
 
+    change_handlers = {
+        'D': _handle_d,
+        'M': _handle_m,
+        'U': _handle_u,
+        'Z': _handle_z,
+    }
+
     def _real_version_call(self) -> datetime.date:
         return _get_teryt_client().service.PobierzDateAktualnegoKatUlic()
 
@@ -881,7 +897,7 @@ class UlicCache(BaseTerytCache):
         return _get_teryt_client().service.PobierzKatalogULIC(version)
 
     def _get_update_real_call(self, start: datetime.date, end: datetime.date): # TODO: return type
-        raise _get_teryt_client().service.PobierzZmianyUlicUrzedowy(start, end)
+        return _get_teryt_client().service.PobierzZmianyUlicUrzedowy(start, end)
 
     def _data_to_cache_contents(self, data: bytes):
         grouped = groupby(_get_dict(data, UlicEntry), lambda x: x.symul)
