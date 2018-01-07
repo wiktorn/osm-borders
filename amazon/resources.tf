@@ -7,7 +7,9 @@ data "aws_iam_policy_document" "osm_apps_lambda_policy_document_ro" {
     effect = "Allow"
     actions = [
       "dynamodb:GetItem",
+      "dynamodb:DeleteItem",
       "dynamodb:DescribeTable",
+      "dynamodb:PutItem",
       "dynamodb:Scan",
     ]
     resources = [
@@ -44,6 +46,7 @@ data "aws_iam_policy_document" "osm_apps_lambda_policy_document_rw" {
       "dynamodb:DescribeTable",
       "dynamodb:GetItem",
       "dynamodb:PutItem",
+      "dynamodb:DeleteItem",
     ]
     resources = [
       "${module.osm_prg_gminy_dict.dynamo_table_arn}",
