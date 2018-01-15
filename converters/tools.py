@@ -68,7 +68,7 @@ class Cache(typing.Generic[T]):
         raise NotImplementedError
 
     def reload(self, contents: typing.Dict[str, T]):
-        for key, value in contents.items():
+        for key, value in tqdm.tqdm(contents.items()):
             self.add(key, value)
 
     def __getitem__(self, item):
@@ -274,7 +274,7 @@ class CacheManager(object):
         if cache['status'] != 'ready':
             raise CacheNotInitialized(name)
 
-        if (version and cache['version'] >= version) or not version:
+        if (version and cache['version'] >= version) or not version or version < 0:
             ret = self.cache_driver.get_table(name, serializer)
             return ret
 
@@ -304,8 +304,15 @@ class CacheManager(object):
 
 if os.environ.get('USE_AWS'):
     import boto3
+    from botocore.config import Config
 
-    __cache_manager = CacheManager(DynamoCacheDriver(boto3.resource('dynamodb')))
+    config = Config(
+        retries=dict(
+            max_attempts=20
+        )
+    )
+
+    __cache_manager = CacheManager(DynamoCacheDriver(boto3.resource('dynamodb', config=config)))
 else:
     __cache_manager = CacheManager(ShelveCacheDriver())
 
