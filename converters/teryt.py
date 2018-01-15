@@ -515,7 +515,7 @@ class UlicEntry(object):
 
     def __init__(self, dct: typing.Dict[str, str]):
         self.sym = dct.get('sym')
-        self.symul = dct.get('sym_ul')
+        self.sym_ul = dct.get('sym_ul')
         self.cecha_orig = dct.get('cecha')
         self.nazwa_1 = nvl(dct.get('nazwa_1'), '')
         self.nazwa_2 = nvl(dct.get('nazwa_2'), '')
@@ -526,18 +526,18 @@ class UlicEntry(object):
 
     def __str__(self):
         return "UlicEntry({{sym: {}, symul: {}, cecha_orig: {}, nazwa_1: {}, nazwa_2: {}, terc: {}}})".format(
-            self.sym, self.symul, self.cecha_orig, self.nazwa_1, self.nazwa_2, self.terc
+            self.sym, self.sym_ul, self.cecha_orig, self.nazwa_1, self.nazwa_2, self.terc
         )
 
     @property
     def cache_key(self):
-        return self.symul
+        return self.sym_ul
 
     def update_from(self, obj: typing.Dict[str, str]):
         dct = dict(
             (UlicEntry._update_to_init_map.get(k, k), v) for (k, v) in obj.items()
         )
-        for attr in ('sym', 'symul', 'cecha_orig', 'nazwa_1', 'nazwa_2'):
+        for attr in ('sym', 'sym_ul', 'cecha_orig', 'nazwa_1', 'nazwa_2'):
             new_value = dct.get(attr)
             if new_value:
                 setattr(self, attr, new_value)
@@ -547,7 +547,7 @@ class UlicEntry(object):
     def to_dict(self) -> typing.Dict[str, str]:
         return {
             'sym': int(self.sym),
-            'symul': int(self.symul),
+            'symul': int(self.sym_ul),
             'cecha': self.cecha_orig,
             'nazwa_1': self.nazwa_1,
             'nazwa_2': self.nazwa_2,
@@ -571,6 +571,7 @@ class UlicEntry(object):
 
     @staticmethod
     def from_update(dct: dict) -> 'UlicEntry':
+        print(dct)
         ret = UlicEntry(
             dict(
                 (UlicEntry._update_to_init_map.get(k, k), v) for (k, v) in dct.items()
@@ -584,12 +585,12 @@ class UlicEntry(object):
         return (
             "add", {
                 "doc": {
-                    'id': 'ulic:' + self.sym + self.symul,
+                    'id': 'ulic:' + self.sym + self.sym_ul,
                     'parent': 'simc_' + self.sym,
                     'terc': self.terc,
                     'value': self.nazwa,
                     'cecha': self.cecha,
-                    'symul': self.symul,
+                    'symul': self.sym_ul,
                     'wojewodztwo': self.woj,
                     'powiat': self.powiat,
                     'gmina': self.gmi,
@@ -632,25 +633,25 @@ class UlicMultiEntry(object):
     __log = logging.getLogger(__name__)
 
     def __init__(self, entry: UlicEntry):
-        self.symul = entry.symul
+        self.sym_ul = entry.sym_ul
         self.cecha = entry.cecha
         self.nazwa = entry.nazwa
         self.entries = {entry.sym: entry}
 
     def __str__(self):
         return "UlicMultiEntry({{symul: {}, cecha: {}, nazwa: {}, entries: {}}})".format(
-            self.symul, self.cecha, self.nazwa, self.entries)
+            self.sym_ul, self.cecha, self.nazwa, self.entries)
 
     def __getitem__(self, item: str):
         return self.entries[item]
 
     @property
     def cache_key(self):
-        return self.symul
+        return self.sym_ul
 
     def add_entry(self, value: UlicEntry):
-        if self.symul != value.symul:
-            raise ValueError("Symul {0} different than expected {1}".format(value.symul, self.symul))
+        if self.sym_ul != value.sym_ul:
+            raise ValueError("Symul {0} different than expected {1}".format(value.sym_ul, self.sym_ul))
 
         if self.cecha != value.cecha:
             self.__log.info("Different CECHA {0} for street {1} in {2} [TERYT: {3}] than expected {4}".format(
@@ -658,7 +659,7 @@ class UlicMultiEntry(object):
 
         if self.nazwa != value.nazwa:
             self.__log.info("Different NAZWA {0} for street {1} in {2} [TERYT: {3}] than expected {4}".format(
-                value.nazwa, self.symul, value.miejscowosc, value.terc, self.nazwa
+                value.nazwa, self.sym_ul, value.miejscowosc, value.terc, self.nazwa
             ))
 
         self.entries[value.sym] = value
@@ -676,10 +677,10 @@ class UlicMultiEntry(object):
         return self.entries.values()
 
     def to_dict(self) -> typing.Dict[str, str]:
-        if not all(x.symul == self.symul for x in self.entries.values()):
+        if not all(x.sym_ul == self.sym_ul for x in self.entries.values()):
             raise ValueError("Inconsistent object")
         return {
-            'symul': int(self.symul),
+            'symul': int(self.sym_ul),
             'cecha': self.cecha,
             'nazwa': self.nazwa,
             'entries': [x.to_dict() for x in self.entries.values()]
@@ -693,9 +694,10 @@ class UlicMultiEntry(object):
     @staticmethod
     def from_dict(dct: dict) -> 'UlicMultiEntry':
         ret = UlicMultiEntry.from_list([UlicEntry.from_dict(x) for x in dct['entries']])
-        assert int(ret.symul) == dct['symul']
-        assert ret.cecha == dct['cecha']
-        assert ret.nazwa == dct['nazwa']
+        #print(dct)
+        assert int(ret.sym_ul) == dct['symul']
+        assert ret.cecha == dct.get('cecha') or (not ret.cecha and not dct.get('cecha')) or ret.cecha is None
+        assert ret.nazwa == dct.get('nazwa') or (not ret.nazwa and not dct.get('nazwa')) or ret.nazwa is None
         return ret
 
     @staticmethod
@@ -707,6 +709,17 @@ class UlicMultiEntry(object):
             for entry in lst:
                 rv.add_entry(entry)
         return rv
+
+    def update_from_entries(self):
+        new_cecha = None
+        new_nazwa = None
+        for ulic_entry in self.entries.values():
+            assert not (new_cecha and new_cecha != ulic_entry.cecha)
+            assert not (new_nazwa and new_nazwa != ulic_entry.nazwa)
+            new_cecha = ulic_entry.cecha
+            new_nazwa = ulic_entry.nazwa
+        self.cecha = new_cecha
+        self.nazwa = new_nazwa
 
 
 def _wmrodz_binary(version: datetime.date) -> bytes:
@@ -758,6 +771,8 @@ class BaseTerytCache(typing.Generic[T]):
             return self._get_cache(self.cache_version())
         except CacheExpired:
             if allow_stale:
+                self.__log.warning("Using stale version of cache: %s (%s). Consider updating.",
+                                   self.path, self.entry_class)
                 return self._get_cache(cache_version=-1)
             cache_version = get_cache_manager().version(self.path)
             current_version = self.cache_version()
@@ -985,6 +1000,8 @@ def teryt() -> Cache[TercEntry]:
 
 
 class UlicCache(BaseTerytCache):
+    __log = logging.getLogger(__name__)
+
     def __init__(self):
         super(UlicCache, self).__init__(TERYT_ULIC_DB, UlicMultiEntry, UlicMultiEntry_pb)
 
@@ -999,12 +1016,12 @@ class UlicCache(BaseTerytCache):
         :return:
         """
         to = UlicEntry.from_update(update_record_to_dict(obj, 'Po'))
-        cache_entry = cache.get(to.symul)
+        cache_entry = cache.get(to.sym_ul)
         if cache_entry:
             cache_entry.add_entry(to)
-            cache.add(to.symul, cache_entry)
+            cache.add(to.sym_ul, cache_entry)
         else:
-            cache.add(to.symul, UlicMultiEntry(to))
+            cache.add(to.sym_ul, UlicMultiEntry(to))
 
     def _handle_m(self, cache: Cache[UlicMultiEntry], obj: Element):
         """
@@ -1015,28 +1032,33 @@ class UlicCache(BaseTerytCache):
         :param obj:
         :return:
         """
+        self.__log.info("UlicCache.handle_m: Processing element: %s", tostring(obj, 'utf-8').decode('utf-8'))
         old = UlicEntry.from_update(update_record_to_dict(obj, 'Przed'))
-        if old.symul:
-            cache_entry = cache.get(old.symul)
+        if old.sym_ul:
+            cache_entry = cache.get(old.sym_ul)
         else:
             cache_entry = None
         if cache_entry:
             ulic_entry = cache_entry.get_by_sym(old.sym)
             ulic_entry.update_from(update_record_to_dict(obj, 'Po'))
-            if old.symul != ulic_entry.symul:
+            print(old)
+            print(ulic_entry)
+            if old.sym_ul != ulic_entry.sym_ul:
+                print(" ============ changing symul ==========")
                 # update old entry (remove if empty)
                 cache_entry.remove_by_sym(old.sym)
                 if len(cache_entry) == 0:
-                    cache.delete(old.symul)
+                    cache.delete(old.sym_ul)
                 else:
-                    cache.add(old.symul, cache_entry)
+                    cache.add(old.sym_ul, cache_entry)
                 # update new entry (create if not existing)
-                cache_entry = cache.get(ulic_entry.symul)
+                cache_entry = cache.get(ulic_entry.sym_ul)
                 if not cache_entry:
                     cache_entry = UlicMultiEntry(ulic_entry)
                 else:
                     cache_entry.add_entry(ulic_entry)
-            cache.add(cache_entry.symul, cache_entry)
+            cache_entry.update_from_entries()
+            cache.add(cache_entry.sym_ul, cache_entry)
         else:
             # TODO: issue warning
             #raise ValueError("Modification of non-existing record: {}".format(str(old)))
@@ -1052,24 +1074,24 @@ class UlicCache(BaseTerytCache):
         :return:
         """
         old = UlicEntry.from_update(update_record_to_dict(obj, 'Przed'))
-        cache_entry = cache.get(old.symul)
+        cache_entry = cache.get(old.sym_ul)
         cache_entry.remove_by_sym(old.sym)
         if len(cache_entry) == 0:
-            cache.delete(old.symul)
+            cache.delete(old.sym_ul)
         else:
-            cache.add(cache_entry.symul, cache_entry)
+            cache.add(cache_entry.sym_ul, cache_entry)
 
     def _handle_z(self, cache: Cache[UlicMultiEntry], obj: Element):
         old = UlicEntry.from_update(update_record_to_dict(obj, 'Przed'))
-        cache_entry = cache.get(old.symul)
+        cache_entry = cache.get(old.sym_ul)
         new_dict = update_record_to_dict(obj, 'Po')
         for ulic_entry in cache_entry.get_all():
             ulic_entry.update_from(new_dict)
 
-        cache_entry.symul = ulic_entry.symul
+        cache_entry.sym_ul = ulic_entry.sym_ul
         cache_entry.cecha = ulic_entry.cecha
         cache_entry.nazwa = ulic_entry.nazwa
-        cache.add(cache_entry.symul, cache_entry)
+        cache.add(cache_entry.sym_ul, cache_entry)
 
     change_handlers = {
         'D': _handle_d,
@@ -1088,7 +1110,7 @@ class UlicCache(BaseTerytCache):
         return _get_teryt_client().service.PobierzZmianyUlicUrzedowy(start, end)
 
     def _data_to_cache_contents(self, data: bytes):
-        grouped = groupby(_get_dict(data, UlicEntry), lambda x: x.symul)
+        grouped = groupby(_get_dict(data, UlicEntry), lambda x: x.sym_ul)
         return dict((key, UlicMultiEntry.from_list(value)) for key, value in grouped.items())
 
 
@@ -1100,8 +1122,8 @@ def ulic() -> Cache[UlicMultiEntry]:
 def init():
     # __wmrodz_create()
     #TerytCache().create_cache()
-    SimcCache().create_cache()
-    # UlicCache().create_cache()
+    #SimcCache().create_cache()
+    UlicCache().create_cache()
 
 
 def update():
@@ -1109,7 +1131,8 @@ def update():
     #SimcCache().get()
     UlicCache().get()
 
+
 def verify():
     TerytCache().verify()
-    #SimcCache().verify()
-    #UlicCache().verify()
+    SimcCache().verify()
+    UlicCache().verify()
