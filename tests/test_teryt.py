@@ -7,6 +7,14 @@ from xml.etree import ElementTree as ET
 import converters.teryt
 
 logging.basicConfig(level=logging.INFO)
+#logging.getLogger("converters.teryt.UlicMultiEntry").setLevel(logging.DEBUG)
+#logging.getLogger("converters.teryt.UlicEntry").setLevel(logging.DEBUG)
+#logging.getLogger("converters.teryt.UlicCache").setLevel(logging.DEBUG)
+#logging.getLogger("converters.teryt.TerytCache").setLevel(logging.DEBUG)
+#logging.getLogger("converters.teryt.SimcCache").setLevel(logging.DEBUG)
+#logging.getLogger("converters.teryt.SimcEntry").setLevel(logging.DEBUG)
+#logging.getLogger("converters.teryt.ToFromJsonSerializer").setLevel(logging.DEBUG)
+
 
 
 class TerytTests(unittest.TestCase):
@@ -57,7 +65,7 @@ class TerytTests(unittest.TestCase):
             converters.teryt.UlicMultiEntry_pb
         )
         ret = serial.deserialize(serial.serialize(multi_entry))
-        self.assertEqual(ret.symul, multi_entry.symul)
+        self.assertEqual(ret.symul, multi_entry.sym_ul)
         self.assertEqual(ret.nazwa, multi_entry.nazwa)
         self.assertEqual(ret.cecha, multi_entry.cecha)
         self.assertEqual(ret.entries.keys(), multi_entry.entries.keys())
@@ -68,3 +76,52 @@ class TerytTests(unittest.TestCase):
             self.assertEqual(ret.entries[i].symul, multi_entry.entries[i].symul)
             self.assertEqual(ret.entries[i].sym, multi_entry.entries[i].sym)
             self.assertEqual(ret.entries[i].terc, multi_entry.entries[i].terc)
+
+    def test_teryt_ulic_update(self):
+        from converters.tools import CacheNotInitialized
+        try:
+            converters.teryt.TerytCache().get(allow_stale=True)
+        except CacheNotInitialized:
+            converters.teryt.TerytCache().create_cache()
+        try:
+            converters.teryt.SimcCache().get(allow_stale=True)
+        except CacheNotInitialized:
+            converters.teryt.SimcCache().create_cache()
+
+        # test
+        with open("ulic_1515369600.xml", "rb") as f:
+            data = f.read()
+        converters.teryt.UlicCache().create_cache(version=1515369600, data=data)
+        del data
+        converters.teryt.UlicCache().get(allow_stale=False, version=1515974400)
+        converters.teryt.UlicCache().verify()
+
+    def test_teryt_ulic_verify(self):
+        converters.teryt.UlicCache().verify()
+
+    def test_teryt_simc_update(self):
+        from converters.tools import CacheNotInitialized
+        try:
+            converters.teryt.TerytCache().get(allow_stale=True)
+        except CacheNotInitialized:
+            converters.teryt.TerytCache().create_cache()
+
+        # test
+        with open("simc_1483228800.xml", "rb") as f:
+            data = f.read()
+        converters.teryt.SimcCache().create_cache(version=1483228800, data=data)
+        del data
+        converters.teryt.SimcCache().get(allow_stale=False, version=1514851200)
+        converters.teryt.SimcCache().verify()
+
+    def test_teryt_terc_update(self):
+        from converters.tools import CacheNotInitialized
+
+        # test
+        with open("terc_1483228800.xml", "rb") as f:
+            data = f.read()
+        converters.teryt.TerytCache().create_cache(version=1483228800, data=data)
+        del data
+        converters.teryt.TerytCache().get(allow_stale=False, version=1514851200)
+        converters.teryt.TerytCache().verify()
+

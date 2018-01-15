@@ -1,30 +1,26 @@
 import base64
 import calendar
+import datetime
+import functools
 import io
 import logging
 import time
 import typing
 import zipfile
 from xml.etree import ElementTree as ET
-
-import functools
-
-import datetime
 from xml.etree.ElementTree import Element
 from xml.etree.ElementTree import tostring
 
 import tqdm
 import zeep
 from google.protobuf.message import Message
+from zeep.wsse.username import UsernameToken
 
 from .teryt_pb2 import \
     TercEntry as TercEntry_pb, \
     SimcEntry as SimcEntry_pb, \
     UlicMultiEntry as UlicMultiEntry_pb
-
-from zeep.wsse.username import UsernameToken
-
-from .tools import groupby, get_cache_manager, CacheExpired, CacheNotInitialized, ProtoSerializer, Cache
+from .tools import groupby, get_cache_manager, CacheExpired, ProtoSerializer, Cache
 
 TERYT_SIMC_DB = 'osm_teryt_simc_v1'
 
@@ -68,7 +64,7 @@ def _get_dict(data: bytes, cls: typing.Type[T]) -> typing.Iterable[T]:
     return (cls(_row_as_dict(x)) for x in tree.find('catalog').iter('row'))
 
 
-def update_record_to_dict(obj: Element, suffix: str, exceptions: typing.Iterable[str]=()) -> typing.Dict[str, str]:
+def update_record_to_dict(obj: Element, suffix: str, exceptions: typing.Iterable[str] = ()) -> typing.Dict[str, str]:
     all_tags = dict((x.tag, x.text.strip() if x.text else x.text) for x in obj.iter())
 
     ret = dict(
@@ -79,6 +75,7 @@ def update_record_to_dict(obj: Element, suffix: str, exceptions: typing.Iterable
         ret[key.lower()] = all_tags[key]
 
     return ret
+
 
 def nvl(obj, substitute):
     if isinstance(obj, type(None)):
@@ -164,7 +161,7 @@ class ToFromJsonSerializer(ProtoSerializer, typing.Generic[T]):
         ret = self.cls.from_dict(deser)
         self.__log.debug("deserialize return value: %s", ret)
         return ret
-        #return self.cls.from_dict(super(ToFromJsonSerializer, self).deserialize(data))
+        # return self.cls.from_dict(super(ToFromJsonSerializer, self).deserialize(data))
 
     def serialize(self, dct: T) -> bytes:
         self.__log.debug("serialize input data %s", str(dct))
@@ -276,7 +273,7 @@ class TercEntry(object):
     def from_update_dict(dct: dict) -> 'TercEntry':
         ret = TercEntry({
             'woj': ensure_2_digits(dct['woj']),
-            'pow': ensure_2_digits(dct['pow']) if dct.get('powiat') else '',
+            'pow': ensure_2_digits(dct['pow']) if dct.get('pow') else '',
             'gmi': ensure_2_digits(dct['gmi']) if dct.get('gmi') else '',
             'rodz': "{0:1}".format(int(dct['rodz'])) if dct.get('rodz') else '',
             'nazwadod': dct.get('nazwadod'),
@@ -284,7 +281,6 @@ class TercEntry(object):
         })
         TercEntry.__log.debug("From dictionary: {} created {}".format(dct, str(ret)))
         return ret
-
 
     def __eq__(self, other):
         if isinstance(other, TercEntry):
@@ -404,7 +400,7 @@ class SimcEntry(object):
         ret.terc = "{0:07}".format(dct['terc'])
         ret.rm_id = ensure_2_digits(dct.get('rm', 0))
         ret.nazwa = dct['nazwa']
-        ret.sym = str(dct['sym'])
+        ret.sym = "{0:07}".format(dct['sym'])
         ret.parent = "{0:07}".format(dct['parent']) if 'parent' in dct else None
         SimcEntry.__log.debug("[from_dict]: From dictionary: {} created {}".format(dct, str(ret)))
         return ret
@@ -419,6 +415,8 @@ class SimcEntry(object):
         ret.sym = "{0:07}".format(int(dct['identyfikator']))
         ret.parent = "{0:07}".format(int(dct['identyfikatormiejscowoscipodstawowej'])) if \
             'identyfikatormiejscowoscipodstawowej' in dct else None
+        if ret.sym == ret.parent:
+            ret.parent = None
         SimcEntry.__log.debug("[from_update_dict] From dictionary: {} created {}".format(dct, str(ret)))
         return ret
 
@@ -465,7 +463,7 @@ class SimcEntry(object):
     def update_from(self, new: typing.Dict[str, str]):
         if 'woj' in new:
             self.terc = ensure_2_digits(new['woj']) + ensure_2_digits(new['pow']) + ensure_2_digits(new['gmi']) + \
-                   "{0:1}".format(new['rodz'])
+                        "{0:1}".format(new['rodz'])
 
         if 'rodzajmiejscowosci' in new:
             self.rm_id = ensure_2_digits(new.get('rodzajmiejscowosci', 0))
@@ -474,6 +472,8 @@ class SimcEntry(object):
 
         if 'identyfikatormiejscowoscipodstawowej' in new:
             self.parent = str(new['identyfikatormiejscowoscipodstawowej'])
+            if self.parent == self.sym:
+                self.parent = None
 
 
 class BasicEntry(object):
@@ -543,7 +543,6 @@ class UlicEntry(object):
         if value is None or value.endswith(' '):
             raise ValueError("Invalid value: {}".format(value))
         self._nazwa_2 = value
-
 
     def __str__(self):
         return "UlicEntry({{sym: {}, symul: {}, cecha_orig: {}, nazwa_1: {}, nazwa_2: {}, terc: {}}})".format(
@@ -795,17 +794,20 @@ class BaseTerytCache(typing.Generic[T]):
             serializer=ToFromJsonSerializer(SimcEntry, SimcEntry_pb)
         )
 
-    def get(self, allow_stale:bool=False) -> Cache[T]:
+    def get(self, allow_stale: bool = False, version: int = None) -> Cache[T]:
+        if not version:
+            version = self.cache_version()
         try:
-            return self._get_cache(self.cache_version())
+            return self._get_cache(version)
         except CacheExpired:
             if allow_stale:
                 self.__log.warning("Using stale version of cache: %s (%s). Consider updating.",
                                    self.path, self.entry_class)
                 return self._get_cache(cache_version=-1)
             cache_version = get_cache_manager().version(self.path)
-            current_version = self.cache_version()
+            current_version = version
             self._cache_update(_int_to_datetime(cache_version), _int_to_datetime(current_version))
+            self.__log.info("Updated dictionary %s from %s to %s", self.path, cache_version, current_version)
             get_cache_manager().mark_ready(self.path, current_version)
             return self.get()
 
@@ -821,11 +823,13 @@ class BaseTerytCache(typing.Generic[T]):
         self.__log.info("Downloading %s dictionary - done", self.path)
         return _zip_read(base64.decodebytes(dane.plik_zawartosc.encode('utf-8')))
 
-    def create_cache(self, version:int=None, data=None):
+    def create_cache(self, version: int = None, data=None):
         if not version:
             version = self.cache_version()
         if not data:
             data = self._get_binary(version)
+        with open("/tmp/test_data_{}_{}".format(self.path, version), "wb+") as f:
+            f.write(data)
         cache = get_cache_manager().create_cache(self.path,
                                                  serializer=ToFromJsonSerializer(self.entry_class, self.protobuf_class))
         cache.reload(self._data_to_cache_contents(data))
@@ -849,7 +853,11 @@ class BaseTerytCache(typing.Generic[T]):
 
     def _cache_update(self, cache_version: datetime.date, current_version: datetime.date):
         data = self._cache_update_binary(cache_version, current_version)
-        with open("/tmp/wns321up", "wb+") as f:
+        with open("/tmp/test_data_update_{}_from_{}_to_{}".format(
+                self.path,
+                cache_version,
+                current_version)
+                , "wb+") as f:
             f.write(data)
         tree = ET.fromstring(data)
         cache = self._get_cache(_date_to_int(cache_version))
@@ -878,11 +886,12 @@ class BaseTerytCache(typing.Generic[T]):
         for key, value in tqdm.tqdm(self._data_to_cache_contents(self._get_binary(self.cache_version())).items()):
             cache_entry = cache.get(key)
             if not cache_entry == value:
-                self.__log.warning("Elements doesn't match: {} != {}".format(str(value), str(cache_entry)))
+                self.__log.warning(
+                    "Elements doesn't match: (original) {} != {} (cache)".format(str(value), str(cache_entry)))
                 errors += 1
         self.__log.error("Total mismatched elements: {}".format(errors))
-
-
+        if errors > 0:
+            raise ValueError("Some elements didn't match")
 
 
 class SimcCache(BaseTerytCache):
@@ -932,7 +941,7 @@ class SimcCache(BaseTerytCache):
             cache.add(cache_entry.sym, cache_entry)
         else:
             # TODO: issue warning
-            #raise ValueError("Modification of non-existing record: {}".format(str(old)))
+            # raise ValueError("Modification of non-existing record: {}".format(str(old)))
             pass
 
     def _handle_p(self, cache: Cache[SimcEntry], obj: Element):
@@ -971,6 +980,8 @@ def simc() -> Cache[SimcEntry]:
 
 
 class TerytCache(BaseTerytCache):
+    __log = logging.getLogger(__name__ + '.TerytCache')
+
     def __init__(self):
         super(TerytCache, self).__init__(TERYT_TERYT_DB, TercEntry, TercEntry_pb)
 
@@ -982,6 +993,7 @@ class TerytCache(BaseTerytCache):
         :param obj:
         :return:
         """
+        self.__log.debug("handle_d object: %s", tostring(obj, 'utf-8').decode('utf-8'))
         new = TercEntry.from_update_dict(update_record_to_dict(obj, 'Po'))
         cache.add(new.terc, new)
 
@@ -990,6 +1002,7 @@ class TerytCache(BaseTerytCache):
         U - usunięcie istniejącej jednostki i dołączenie do innej
             - wypełnione wszystkie pola "przed modyfikacją"
         """
+        self.__log.debug("handle_u object: %s", tostring(obj, 'utf-8').decode('utf-8'))
         old = TercEntry.from_update_dict(update_record_to_dict(obj, 'Przed'))
         cache.delete(old.terc)
 
@@ -1001,6 +1014,7 @@ class TerytCache(BaseTerytCache):
         :param obj:
         :return:
         """
+        self.__log.debug("handle_m object: %s", tostring(obj, 'utf-8').decode('utf-8'))
         old = TercEntry.from_update_dict(update_record_to_dict(obj, 'Przed'))
 
         cache_entry = cache.get(old.terc)
@@ -1011,7 +1025,7 @@ class TerytCache(BaseTerytCache):
             cache.add(cache_entry.terc, cache_entry)
         else:
             # TODO: issue warning
-            #raise ValueError("Modification of non-existing record: {}".format(str(old)))
+            # raise ValueError("Modification of non-existing record: {}".format(str(old)))
             pass
 
     change_handlers = {
@@ -1083,6 +1097,11 @@ class UlicCache(BaseTerytCache):
             ulic_entry.update_from(update_record_to_dict(obj, 'Po'))
             self.__log.debug(old)
             self.__log.debug(ulic_entry)
+
+            if ulic_entry.sym != old.sym:
+                cache_entry.add_entry(ulic_entry)
+                cache_entry.remove_by_sym(old.sym)
+
             if old.sym_ul != ulic_entry.sym_ul:
                 self.__log.debug(" ============ changing symul ==========")
                 # update old entry (remove if empty)
@@ -1102,7 +1121,7 @@ class UlicCache(BaseTerytCache):
             cache.add(cache_entry.sym_ul, cache_entry)
         else:
             # TODO: issue warning
-            #raise ValueError("Modification of non-existing record: {}".format(str(old)))
+            # raise ValueError("Modification of non-existing record: {}".format(str(old)))
             pass
 
     def _handle_u(self, cache: Cache[UlicMultiEntry], obj: Element):
@@ -1164,14 +1183,14 @@ def ulic() -> Cache[UlicMultiEntry]:
 
 def init():
     # __wmrodz_create()
-    #TerytCache().create_cache()
-    #SimcCache().create_cache()
+    # TerytCache().create_cache()
+    # SimcCache().create_cache()
     UlicCache().create_cache()
 
 
 def update():
-    #TerytCache().get()
-    #SimcCache().get()
+    # TerytCache().get()
+    # SimcCache().get()
     UlicCache().get()
 
 
