@@ -828,8 +828,8 @@ class BaseTerytCache(typing.Generic[T]):
             version = self.cache_version()
         if not data:
             data = self._get_binary(version)
-        with open("/tmp/test_data_{}_{}".format(self.path, version), "wb+") as f:
-            f.write(data)
+        # with open("/tmp/test_data_{}_{}".format(self.path, version), "wb+") as f:
+        #    f.write(data)
         cache = get_cache_manager().create_cache(self.path,
                                                  serializer=ToFromJsonSerializer(self.entry_class, self.protobuf_class))
         cache.reload(self._data_to_cache_contents(data))
@@ -853,12 +853,12 @@ class BaseTerytCache(typing.Generic[T]):
 
     def _cache_update(self, cache_version: datetime.date, current_version: datetime.date):
         data = self._cache_update_binary(cache_version, current_version)
-        with open("/tmp/test_data_update_{}_from_{}_to_{}".format(
-                self.path,
-                cache_version,
-                current_version)
-                , "wb+") as f:
-            f.write(data)
+        # with open("/tmp/test_data_update_{}_from_{}_to_{}".format(
+        #         self.path,
+        #         cache_version,
+        #         current_version)
+        #         , "wb+") as f:
+        #     f.write(data)
         tree = ET.fromstring(data)
         cache = self._get_cache(_date_to_int(cache_version))
 
@@ -1182,15 +1182,15 @@ def ulic() -> Cache[UlicMultiEntry]:
 
 
 def init():
-    # __wmrodz_create()
-    # TerytCache().create_cache()
-    # SimcCache().create_cache()
+    __wmrodz_create()
+    TerytCache().create_cache()
+    SimcCache().create_cache()
     UlicCache().create_cache()
 
 
 def update():
-    # TerytCache().get()
-    # SimcCache().get()
+    TerytCache().get()
+    SimcCache().get()
     UlicCache().get()
 
 
