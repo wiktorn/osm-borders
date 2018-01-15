@@ -69,7 +69,7 @@ def _get_dict(data: bytes, cls: typing.Type[T]) -> typing.Iterable[T]:
 
 
 def update_record_to_dict(obj: Element, suffix: str, exceptions: typing.Iterable[str]=()) -> typing.Dict[str, str]:
-    all_tags = dict((x.tag, x.text) for x in obj.iter())
+    all_tags = dict((x.tag, x.text.strip() if x.text else x.text) for x in obj.iter())
 
     ret = dict(
         (key.lower()[:-len(suffix)], value) for key, value in all_tags.items() if key.endswith(suffix)
@@ -173,7 +173,8 @@ class ToFromJsonSerializer(ProtoSerializer, typing.Generic[T]):
         ret = super(ToFromJsonSerializer, self).serialize(as_dct)
         self.__log.debug("serialize ret: %s", str(ret))
         self.__log.debug("deserialized: %s", self.deserialize(ret))
-        assert self.deserialize(ret) == dct
+        if self.deserialize(ret) != dct:
+            raise AssertionError("ret != dct")
         return ret
 
 
@@ -523,6 +524,27 @@ class UlicEntry(object):
         #    dct.get('rodz_gmi'), "City terc code: {0} != {1} (terc code from ulic".format(
         #    self.terc, dct.get('woj') + dct.get('pow') + dct.get('gmi') + dct.get('rodz_gmi'))
 
+    @property
+    def nazwa_1(self):
+        return self._nazwa_1
+
+    @nazwa_1.setter
+    def nazwa_1(self, value):
+        if value is None or value.endswith(' '):
+            raise ValueError("Invalid value: {}".format(value))
+        self._nazwa_1 = value
+
+    @property
+    def nazwa_2(self):
+        return self._nazwa_2
+
+    @nazwa_2.setter
+    def nazwa_2(self, value):
+        if value is None or value.endswith(' '):
+            raise ValueError("Invalid value: {}".format(value))
+        self._nazwa_2 = value
+
+
     def __str__(self):
         return "UlicEntry({{sym: {}, symul: {}, cecha_orig: {}, nazwa_1: {}, nazwa_2: {}, terc: {}}})".format(
             self.sym, self.sym_ul, self.cecha_orig, self.nazwa_1, self.nazwa_2, self.terc
@@ -536,7 +558,6 @@ class UlicEntry(object):
         dct = dict(
             (UlicEntry._update_to_init_map.get(k, k), v) for (k, v) in obj.items()
         )
-        print(dct)
         for attr in ('sym', 'sym_ul'):
             new_value = dct.get(attr)
             if new_value:
@@ -689,7 +710,7 @@ class UlicMultiEntry(object):
             'symul': int(self.sym_ul),
             'cecha': self.cecha,
             'nazwa': self.nazwa,
-            'entries': [x.to_dict() for x in self.entries.values()]
+            'entries': [self.entries[key].to_dict() for key in sorted(self.entries.keys())]
         }
 
     def __eq__(self, other):
@@ -717,7 +738,6 @@ class UlicMultiEntry(object):
         return rv
 
     def update_from_entries(self):
-        print(self)
         new_cecha = None
         new_nazwa = None
         for ulic_entry in self.entries.values():
@@ -786,6 +806,7 @@ class BaseTerytCache(typing.Generic[T]):
             cache_version = get_cache_manager().version(self.path)
             current_version = self.cache_version()
             self._cache_update(_int_to_datetime(cache_version), _int_to_datetime(current_version))
+            get_cache_manager().mark_ready(self.path, current_version)
             return self.get()
 
     def cache_version(self) -> Version:
@@ -828,6 +849,8 @@ class BaseTerytCache(typing.Generic[T]):
 
     def _cache_update(self, cache_version: datetime.date, current_version: datetime.date):
         data = self._cache_update_binary(cache_version, current_version)
+        with open("/tmp/wns321up", "wb+") as f:
+            f.write(data)
         tree = ET.fromstring(data)
         cache = self._get_cache(_date_to_int(cache_version))
 
@@ -934,9 +957,11 @@ class SimcCache(BaseTerytCache):
         return _get_teryt_client().service.PobierzDateAktualnegoKatSimc()
 
     def _get_binary_real_call(self, version: datetime.date):  # TODO: return type
+        self.__log.debug("_get_binary_real_call(version=%s)", version)
         return _get_teryt_client().service.PobierzKatalogSIMC(version)
 
     def _get_update_real_call(self, start: datetime.date, end: datetime.date):  # TODO: return type
+        self.__log.debug("_get_update_real_call(start=%s, end=%s)", start, end)
         return _get_teryt_client().service.PobierzZmianySimcUrzedowy(start, end)
 
 
@@ -1047,17 +1072,19 @@ class UlicCache(BaseTerytCache):
         """
         self.__log.debug("UlicCache.handle_m: Processing element: %s", tostring(obj, 'utf-8').decode('utf-8'))
         old = UlicEntry.from_update(update_record_to_dict(obj, 'Przed'))
+        self.__log.debug("Old object: %s", old)
         if old.sym_ul:
             cache_entry = cache.get(old.sym_ul)
         else:
             cache_entry = None
         if cache_entry:
+            self.__log.debug("Cache entry: %s", cache_entry)
             ulic_entry = cache_entry.get_by_sym(old.sym)
             ulic_entry.update_from(update_record_to_dict(obj, 'Po'))
-            print(old)
-            print(ulic_entry)
+            self.__log.debug(old)
+            self.__log.debug(ulic_entry)
             if old.sym_ul != ulic_entry.sym_ul:
-                print(" ============ changing symul ==========")
+                self.__log.debug(" ============ changing symul ==========")
                 # update old entry (remove if empty)
                 cache_entry.remove_by_sym(old.sym)
                 if len(cache_entry) == 0:
@@ -1071,7 +1098,7 @@ class UlicCache(BaseTerytCache):
                 else:
                     cache_entry.add_entry(ulic_entry)
             cache_entry.update_from_entries()
-            print(cache_entry)
+            self.__log.debug(cache_entry)
             cache.add(cache_entry.sym_ul, cache_entry)
         else:
             # TODO: issue warning
@@ -1090,13 +1117,7 @@ class UlicCache(BaseTerytCache):
         self.__log.debug("UlicCache.handle_u: Processing element: %s", tostring(obj, 'utf-8').decode('utf-8'))
         old = UlicEntry.from_update(update_record_to_dict(obj, 'Przed'))
         cache_entry = cache.get(old.sym_ul)
-        try:
-            cache_entry.remove_by_sym(old.sym)
-        except KeyError:
-            self.__log.error("Deleting nonexisting record. symul: %s, tried to remove simc: %s (%s)",
-                             old.sym_ul,
-                             old.sym,
-                             SimcCache().get(allow_stale=True).get(old.sym).nazwa)
+        cache_entry.remove_by_sym(old.sym)
         if len(cache_entry) == 0:
             cache.delete(old.sym_ul)
         else:
