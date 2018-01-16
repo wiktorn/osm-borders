@@ -294,7 +294,11 @@ resource "aws_api_gateway_deployment" "osm_borders_deployment" {
 }
 
 output "url" {
-  value = "${aws_api_gateway_deployment.osm_borders_deployment.invoke_url}"
+  value = "${aws_api_gateway_deployment.osm_borders_deployment.invoke_url}/osm-borders/list/"
+}
+
+output "test_cal" {
+  value = "${aws_api_gateway_deployment.osm_borders_deployment.invoke_url}/osm-borders/2807032.osm"
 }
 
 module "osm_prg_gminy_dict" {
