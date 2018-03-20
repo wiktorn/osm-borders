@@ -61,10 +61,11 @@ __log = logging.getLogger(__name__)
 
 @functools.lru_cache(maxsize=1)
 def get_prg_filename() -> typing.Tuple[str, int]:
-    resp = requests.get("http://www.codgik.gov.pl/index.php/darmowe-dane/prg.html")
+    #resp = requests.get("http://www.codgik.gov.pl/index.php/darmowe-dane/prg.html")
+    resp = requests.get("http://www.gugik.gov.pl/geodezja-i-kartografia/pzgik/dane-bez-oplat/dane-z-panstwowego-rejestru-granic-i-powierzchni-jednostek-podzialow-terytorialnych-kraju-prg")
     soup = bs4.BeautifulSoup(resp.text, "html.parser")
-    link = soup.find("a", text="PRG – jednostki administracyjne")
-    version = link.parent.parent.find_all('td')[-1].text
+    link = soup.find("a", text="*PRG – jednostki administracyjne")
+    version = link.parent.parent.parent.parent.find_all('td')[-1].text
     return link.get('href'), calendar.timegm(time.strptime(version, '%d-%m-%Y'))
 
 
