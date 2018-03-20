@@ -192,7 +192,7 @@ def get_gminy(*, terc):
 def page_not_found(e):
     logger.info("Redirecting to: %s", url_for("list_all"))
     # resp = redirect(url_for("list_all"))
-    resp = redirect("/api" + url_for("list_all"))
+    resp = redirect(url_for("list_all"))
     resp.mimetype = 'text/html'
     return resp
 
