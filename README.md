@@ -23,6 +23,7 @@ Because AWS API Gateway calls are limited to 60 seconds and the process may take
 SNS queues are used to allow longer Lambda calls. Clients 
 
 ```
+ package-rest.zip
 +-------------------+     2. Submit fetch task
 | /<type>/<prg>.osm +-------------+
 +-+-----------------+             |
@@ -32,9 +33,9 @@ SNS queues are used to allow longer Lambda calls. Clients
   | 5. Fetch from cache    +------+-----+
   |                               |
   |                               |
-  |                       +-------+-------+  3. Fetch  +-----------+
-  |                       | Amazon Lambda +------------+ Geoportal |
-  |                       +--+------------+     data   +-----------+
+  |                       +-------+-------------+  3. Fetch  +-----------+
+  |                       | package-fetcher.zip +------------+ Geoportal |
+  |                       +--+------------------+     data   +-----------+
 +-+--------+    4. Put into  |
 | DynamoDB +-----------------+
 +----------+       cache

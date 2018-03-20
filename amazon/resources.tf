@@ -34,29 +34,14 @@ data "aws_iam_policy_document" "osm_apps_lambda_policy_document_ro" {
       "${module.osm_prg_gminy_cache.dynamo_ouput_cache_arn}",
     ]
   }
-}
 
-data "aws_iam_policy_document" "osm_apps_lambda_policy_document_rw" {
   statement {
     effect = "Allow"
-    actions = [
-      "dynamodb:BatchWriteItem",
-      "dynamodb:CreateTable",
-      "dynamodb:DeleteTable",
-      "dynamodb:DescribeTable",
-      "dynamodb:GetItem",
-      "dynamodb:PutItem",
-      "dynamodb:DeleteItem",
+    actions =[
+      "sns:Publish"
     ]
     resources = [
-      "${module.osm_prg_gminy_dict.dynamo_table_arn}",
-      "${module.osm_prg_wojewodztwa_dict.dynamo_table_arn}",
-      "${module.osm_cache_meta_dict.dynamo_table_arn}",
-      "${module.osm_teryt_wmrodz_dict.dynamo_table_arn}",
-      "${module.osm_teryt_teryt_dict.dynamo_table_arn}",
-      "${module.osm_teryt_simc_dict.dynamo_table_arn}",
-      "${module.osm_teryt_ulic_dict.dynamo_table_arn}",
-
+      "${aws_sns_topic.osm_api_osm_borders_topic.arn}"
     ]
   }
 }
@@ -113,27 +98,6 @@ resource "aws_iam_role_policy" "osm_apps_lambda_iam_trace" {
 }
 
 
-resource "aws_iam_user" "osm_borders_dynamo_rw" {
-  name = "osm_borders_lambda"
-  path = "/osm/osm-borders/"
-}
-
-resource "aws_iam_user_policy" "osm_borders_dynamo_rw_policy" {
-  name = "osm_borders_dynamo_rw_policy"
-  user = "${aws_iam_user.osm_borders_dynamo_rw.name}"
-  policy = "${data.aws_iam_policy_document.osm_apps_lambda_policy_document_rw.json}"
-}
-
-resource "aws_iam_access_key" "osm_borders_lambda_access_key" {
-  user    = "${aws_iam_user.osm_borders_dynamo_rw.name}"
-}
-
-/*
-  access key is here:
-  access_key = ${aws_iam_access_key.osm_borders_lambda_access_key.id}
-  secret = ${aws_iam_access_key.osm_borders_lambda_access_key.secret}
-*/
-
 resource "aws_lambda_function" "osm_borders_lambda_rest" {
   s3_bucket = "${aws_s3_bucket_object.osm_borders_package_rest.bucket}"
   s3_key = "${aws_s3_bucket_object.osm_borders_package_rest.key}"
@@ -148,7 +112,8 @@ resource "aws_lambda_function" "osm_borders_lambda_rest" {
 
   environment {
     variables {
-      foo   = "bar"
+      OSM_BORDERS_CACHE_TABLE = "${module.osm_prg_gminy_cache.name}"
+      OSM_BORDERS_SNS_TOPIC_ARN = "${aws_sns_topic.osm_api_osm_borders_topic.arn}"
       USE_AWS = "true"
     }
   }
@@ -162,6 +127,13 @@ resource "aws_lambda_permission" "osm_borders_lambda_permissions" {
   statement_id = "AllowExecutionFromAPIGateway"
 }
 
+resource "aws_lambda_permission" "osm_borders_sns_exec_fetcher_permission" {
+  action = "lambda:invokeFunction"
+  principal = "sns.amazonaws.com"
+  function_name = "${aws_lambda_function.osm_borders_lambda_fetcher.function_name}"
+  statement_id = "AllowExecutionFromSNS"
+  source_arn = "${aws_sns_topic.osm_api_osm_borders_topic.arn}"
+}
 
 resource "aws_api_gateway_rest_api" "osm_borders_api" {
   name = "osm_borders"
@@ -179,11 +151,23 @@ resource "aws_api_gateway_resource" "osm_borders_terc_api_resource" {
   rest_api_id = "${aws_api_gateway_rest_api.osm_borders_api.id}"
 }
 
+resource "aws_api_gateway_resource" "osm_borders_get_api_resource" {
+  parent_id = "${aws_api_gateway_resource.osm_borders_api_resource.id}"
+  path_part = "get"
+  rest_api_id = "${aws_api_gateway_rest_api.osm_borders_api.id}"
+}
+
+resource "aws_api_gateway_resource" "osm_borders_get_rest_api_resource" {
+  parent_id = "${aws_api_gateway_resource.osm_borders_get_api_resource.id}"
+  path_part = "{proxy+}"
+  rest_api_id = "${aws_api_gateway_rest_api.osm_borders_api.id}"
+}
+
 
 resource "aws_api_gateway_method" "osm_borders_api_method" {
   authorization = "NONE"
   http_method = "GET"
-  resource_id = "${aws_api_gateway_resource.osm_borders_terc_api_resource.id}"
+  resource_id = "${aws_api_gateway_resource.osm_borders_get_rest_api_resource.id}"
   rest_api_id = "${aws_api_gateway_rest_api.osm_borders_api.id}"
   request_parameters {
     "method.request.header.host" = true
@@ -192,7 +176,7 @@ resource "aws_api_gateway_method" "osm_borders_api_method" {
 
 resource "aws_api_gateway_integration" "osm_borders_api_integration" {
   rest_api_id = "${aws_api_gateway_rest_api.osm_borders_api.id}"
-  resource_id = "${aws_api_gateway_resource.osm_borders_terc_api_resource.id}"
+  resource_id = "${aws_api_gateway_resource.osm_borders_get_rest_api_resource.id}"
   http_method = "${aws_api_gateway_method.osm_borders_api_method.http_method}"
   integration_http_method = "POST"
   type ="AWS_PROXY"
@@ -209,7 +193,7 @@ resource "aws_api_gateway_integration" "osm_borders_api_integration" {
 resource "aws_api_gateway_method_settings" "osm_borders_method_settings" {
   rest_api_id = "${aws_api_gateway_rest_api.osm_borders_api.id}"
   stage_name = "${aws_api_gateway_deployment.osm_borders_deployment.stage_name}"
-  method_path = "${aws_api_gateway_resource.osm_borders_terc_api_resource.path_part}/${aws_api_gateway_method.osm_borders_api_method.http_method}"
+  method_path = "${aws_api_gateway_resource.osm_borders_get_rest_api_resource.path_part}/${aws_api_gateway_method.osm_borders_api_method.http_method}"
 
   settings {
     logging_level = "INFO"
@@ -273,9 +257,8 @@ resource "aws_lambda_function" "osm_borders_lambda_fetcher" {
 
   environment {
     variables {
-      OSM_BORDERS_CACHE_TABLE = "${module.osm_prg_gminy_cache.name}"
-      OSM_BORDERS_SNS_TOPIC_ARN = "${aws_sns_topic.osm_api_osm_borders_topic.arn}"
       USE_AWS = "true"
+      OSM_BORDERS_CACHE_TABLE = "${module.osm_prg_gminy_cache.name}"
     }
   }
   depends_on = ["null_resource.build_lambda"]
@@ -298,7 +281,7 @@ output "url" {
 }
 
 output "test_cal" {
-  value = "${aws_api_gateway_deployment.osm_borders_deployment.invoke_url}/osm-borders/2807032.osm"
+  value = "${aws_api_gateway_deployment.osm_borders_deployment.invoke_url}/osm-borders/get/all/2807032.osm"
 }
 
 module "osm_prg_gminy_dict" {

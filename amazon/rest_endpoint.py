@@ -1,10 +1,11 @@
+import json
 import logging
 import os
 import time
 from xml.sax.saxutils import quoteattr
 
 import boto3
-import lz4
+import lz4.block
 from flask import make_response as _make_response
 from flask import request, redirect, url_for, render_template
 from flask_lambda import FlaskLambda
@@ -17,7 +18,8 @@ SNS_TOPIC = os.environ.get('OSM_BORDERS_SNS_TOPIC_ARN')
 app = FlaskLambda(__name__)
 
 logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.INFO)
+#logging.basicConfig(level=logging.INFO)
+logger.setLevel(logging.INFO)
 
 
 def make_response(ret, code):
@@ -38,10 +40,10 @@ def get_borders(*, typ, terc):
     if typ not in ('all', 'nosplit', 'split', 'gminy'):
         raise ValueError("Invalid type: {}".format(typ))
 
-    if typ == 'gminy' and len(terc) != 4 or len(terc) != 7:
+    if (typ == 'gminy' and len(terc) != 4) or (typ != 'gminy' and len(terc) != 7):
         raise ValueError("Invalid terc length {} for type {}".format(len(terc), typ))
 
-    request_time = time.time()
+    request_time = int(time.time())
 
     def response(body):
         resp = make_response(body, 200)
@@ -49,7 +51,8 @@ def get_borders(*, typ, terc):
         return resp
 
     logger.info("Using cache table: %s", PRG_GMINY_CACHE_V_)
-    cache_table = boto3.resource('dynamodb').Table(PRG_GMINY_CACHE_V_)
+
+    cache_table = boto3.resource('dynamodb').Table(name=PRG_GMINY_CACHE_V_)
 
     def fetch_from_cache():
         return cache_table.get_item(
@@ -64,7 +67,7 @@ def get_borders(*, typ, terc):
                 entry['Item']['ttl'] > time.time() and \
                 entry['Item'].get('value'):
             logger.error("cache_return from table")
-            return response(lz4.decompress(entry['Item']['value'].value))
+            return response(lz4.block.decompress(entry['Item']['value'].value))
         return None
 
     cache_entry = fetch_from_cache()
@@ -72,7 +75,11 @@ def get_borders(*, typ, terc):
     if ret:
         return ret
 
-    if not (cache_entry.get('Item') and not cache_entry['Item'].get('value')):
+    logger.info ("cache_entry.get('Item') == %s cache_entry['item'].get('value') == %s",
+                 bool(cache_entry.get('Item')),
+                 bool(cache_entry.get('Item', {}).get('value'))
+                 )
+    if not cache_entry.get('Item', {}).get('value') or cache_entry.get('Item', {}).get('ttl') < time.time():
         # sentinel element not found, create it and send request
         logger.info("Creating sentinel item in cache: %s", tools.join([terc, typ]))
         cache_table.put_item(
@@ -87,11 +94,12 @@ def get_borders(*, typ, terc):
         sns = boto3.client('sns')
         sns.publish(
             TopicArn=SNS_TOPIC,
-            Message={
+            Message=json.dumps({
+                "default": json.dumps({
                 "terc": terc,
                 "type": typ,
                 "request_time": request_time
-            },
+            })}),
             MessageStructure='json'
         )
 
