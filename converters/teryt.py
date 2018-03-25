@@ -1,26 +1,26 @@
 import base64
 import calendar
+import contextlib
 import datetime
 import functools
 import io
 import logging
-import time
 import typing
 import zipfile
 from xml.etree import ElementTree as ET
 from xml.etree.ElementTree import Element
 from xml.etree.ElementTree import tostring
 
-import tqdm
+import requests
 import zeep
-from google.protobuf.message import Message
 from zeep.wsse.username import UsernameToken
 
+import converters.tools
 from .teryt_pb2 import \
     TercEntry as TercEntry_pb, \
     SimcEntry as SimcEntry_pb, \
     UlicMultiEntry as UlicMultiEntry_pb
-from .tools import groupby, get_cache_manager, CacheExpired, ProtoSerializer, Cache
+from .tools import groupby, get_cache_manager, ProtoSerializer, Cache
 
 TERYT_SIMC_DB = 'osm_teryt_simc_v1'
 
@@ -51,15 +51,15 @@ def _row_as_dict(elem: ET.Element) -> typing.Dict[str, str]:
     )
 
 
-def _get_teryt_client() -> zeep.Client:
+def _get_teryt_client(session: requests.Session = requests.Session()) -> zeep.Client:
     __log = logging.getLogger(__name__ + '.get_teryt_client')
     __log.info("Connecting to TERYT web service")
     wsdl = 'https://uslugaterytws1.stat.gov.pl/wsdl/terytws1.wsdl'
     wsse = UsernameToken('osmaddrtools', '#06JWOWutt4')
-    return zeep.Client(wsdl=wsdl, wsse=wsse)
+    return zeep.Client(wsdl=wsdl, wsse=wsse, transport=zeep.Transport(session=session))
 
 
-def _get_dict(data: bytes, cls: typing.Type[T]) -> typing.Iterable[T]:
+def _get_dict(data: bytes, cls: typing.Callable[[typing.Any], typing.Type[T]]) -> typing.Iterable[T]:
     tree = ET.fromstring(data)
     return (cls(_row_as_dict(x)) for x in tree.find('catalog').iter('row'))
 
@@ -750,16 +750,16 @@ class UlicMultiEntry(object):
 
 def _wmrodz_binary(version: datetime.date) -> bytes:
     __log = logging.getLogger(__name__ + '._wmrodz_binary')
-    client = _get_teryt_client()
     __log.info("Downloading WMRODZ dictionary")
-    dane = client.service.PobierzKatalogWMRODZ(version)
+    with contextlib.closing(requests.Session()) as session:
+        dane = _get_teryt_client(session).service.PobierzKatalogWMRODZ(version)
     __log.info("Downloading WMRODZ dictionary - done")
     return _zip_read(base64.decodebytes(dane.plik_zawartosc.encode('utf-8')))
 
 
 def __wmrodz_create():
     __log = logging.getLogger(__name__ + '._wmrodz_create')
-    version = TerytCache().cache_version()
+    version = TerytCache().current_cache_version()
     data = _wmrodz_binary(_int_to_datetime(version))
     cache = get_cache_manager().create_cache(TERYT_WMRODZ_DB)
     cache.reload(dict((x.rm, x.nazwa_rm) for x in _get_dict(data, BasicEntry)))
@@ -771,96 +771,26 @@ def wmrodz() -> Cache[str]:
     return get_cache_manager().get_cache(TERYT_WMRODZ_DB)
 
 
-class BaseTerytCache(typing.Generic[T]):
+class BaseTerytCache(converters.tools.VersionedCache):
     __log = logging.getLogger(__name__ + '.BaseTerytCache')
     change_handlers = dict()
 
-    def __init__(self, path: str, entry_class: typing.Type[T], protobuf_class: typing.Type[Message]):
-        self.entry_class = entry_class
-        self.protobuf_class = protobuf_class
-        self.path = path
-        self.version_ttl = 0
-        self._version = Version(0)
+    @staticmethod
+    def convert_binary_data(data) -> bytes:
+        return _zip_read(base64.decodebytes(data.plik_zawartosc.encode('utf-8')))
 
-    def _get_cache(self, cache_version: Version = None) -> Cache[T]:
-        if cache_version:
-            return get_cache_manager().get_cache(
-                self.path,
-                version=cache_version,
-                serializer=ToFromJsonSerializer(self.entry_class, self.protobuf_class)
-            )
-        return get_cache_manager().get_cache(
-            self.path,
-            serializer=ToFromJsonSerializer(SimcEntry, SimcEntry_pb)
+    @staticmethod
+    def _data_to_dict(data, cls: typing.Callable[[typing.Any], typing.Type[T]]) -> typing.Dict[str, T]:
+        tree = ET.fromstring(data)
+        return dict(
+            (y.cache_key, y) for y in
+            (cls(_row_as_dict(x)) for x in tree.find('catalog').iter('row'))
         )
 
-    def get(self, allow_stale: bool = False, version: int = None) -> Cache[T]:
-        if not version:
-            version = self.cache_version()
-        try:
-            return self._get_cache(version)
-        except CacheExpired:
-            if allow_stale:
-                self.__log.warning("Using stale version of cache: %s (%s). Consider updating.",
-                                   self.path, self.entry_class)
-                return self._get_cache(cache_version=-1)
-            cache_version = get_cache_manager().version(self.path)
-            current_version = version
-            self._cache_update(_int_to_datetime(cache_version), _int_to_datetime(current_version))
-            self.__log.info("Updated dictionary %s from %s to %s", self.path, cache_version, current_version)
-            get_cache_manager().mark_ready(self.path, current_version)
-            return self.get()
-
-    def cache_version(self) -> Version:
-        if time.time() > self.version_ttl:
-            self._version = _date_to_int(self._real_version_call())
-            self.version_ttl = time.time() + 3600
-        return self._version
-
-    def _get_binary(self, version: Version) -> bytes:
-        self.__log.info("Downloading %s dictionary", self.path)
-        dane = self._get_binary_real_call(_int_to_datetime(version))
-        self.__log.info("Downloading %s dictionary - done", self.path)
-        return _zip_read(base64.decodebytes(dane.plik_zawartosc.encode('utf-8')))
-
-    def create_cache(self, version: int = None, data=None):
-        if not version:
-            version = self.cache_version()
-        if not data:
-            data = self._get_binary(version)
-        # with open("/tmp/test_data_{}_{}".format(self.path, version), "wb+") as f:
-        #    f.write(data)
-        cache = get_cache_manager().create_cache(self.path,
-                                                 serializer=ToFromJsonSerializer(self.entry_class, self.protobuf_class))
-        cache.reload(self._data_to_cache_contents(data))
-        get_cache_manager().mark_ready(self.path, version)
-        self.__log.info("%s dictionary created", self.path)
-
-    def _data_to_cache_contents(self, data: bytes):
-        return dict((x.cache_key, x) for x in _get_dict(data, self.entry_class))
-
-    def _cache_update_binary(self, start: datetime.date, end: datetime.date) -> bytes:
-        """
-        :param start:
-        :param end:
-        :return:
-
-        """
-        self.__log.info("Downloading %s dictionary update from: %s to %s", self.path, start, end)
-        dane = self._get_update_real_call(start, end)
-        self.__log.info("Downloading %s dictionary update - done", self.path)
-        return _zip_read(base64.decodebytes(dane.plik_zawartosc.encode('utf-8')))
-
-    def _cache_update(self, cache_version: datetime.date, current_version: datetime.date):
-        data = self._cache_update_binary(cache_version, current_version)
-        # with open("/tmp/test_data_update_{}_from_{}_to_{}".format(
-        #         self.path,
-        #         cache_version,
-        #         current_version)
-        #         , "wb+") as f:
-        #     f.write(data)
+    def update_cache(self, from_version: Version, target_version: Version):
+        data = self._get_updates(from_version, target_version)
         tree = ET.fromstring(data)
-        cache = self._get_cache(_date_to_int(cache_version))
+        cache = self._get_cache(from_version)
 
         for zmiana in tree.iter('zmiana'):
             operation = zmiana.find('TypKorekty').text
@@ -871,34 +801,46 @@ class BaseTerytCache(typing.Generic[T]):
                                  ", ".join(self.change_handlers.keys()))
             handler(self, cache, zmiana)
 
-    def _real_version_call(self) -> datetime.date:
-        raise NotImplementedError
+        self.mark_ready(target_version)
 
-    def _get_binary_real_call(self, version: datetime.date):  # TODO: return type
+    def _get_updates(self, from_version: Version, target_version: Version):
         raise NotImplementedError
-
-    def _get_update_real_call(self, start: datetime.date, end: datetime.date):  # TODO: return type
-        raise NotImplementedError
-
-    def verify(self):
-        cache = self._get_cache(cache_version=-1)
-        errors = 0
-        for key, value in tqdm.tqdm(self._data_to_cache_contents(self._get_binary(self.cache_version())).items()):
-            cache_entry = cache.get(key)
-            if not cache_entry == value:
-                self.__log.warning(
-                    "Elements doesn't match: (original) {} != {} (cache)".format(str(value), str(cache_entry)))
-                errors += 1
-        self.__log.error("Total mismatched elements: {}".format(errors))
-        if errors > 0:
-            raise ValueError("Some elements didn't match")
 
 
 class SimcCache(BaseTerytCache):
     __log = logging.getLogger(__name__ + '.SimcCache')
 
     def __init__(self):
-        super(SimcCache, self).__init__(TERYT_SIMC_DB, SimcEntry, SimcEntry_pb)
+        super(SimcCache, self).__init__(TERYT_SIMC_DB, SimcEntry)
+
+    def _get_cache_data(self, version: Version) -> typing.Dict[str, SimcEntry]:
+        self.__log.info("Downloading SIMC version: %s", _int_to_datetime(version))
+        with contextlib.closing(requests.Session()) as session:
+            return self._data_to_dict(
+                self.convert_binary_data(
+                    _get_teryt_client(session).service.PobierzKatalogSIMC(_int_to_datetime(version))
+                ),
+                SimcEntry
+            )
+
+    def _get_updates(self, from_version: Version, target_version: Version):
+        self.__log.info("Downloading SIMC updates from %s to %s", _int_to_datetime(from_version),
+                        _int_to_datetime(target_version))
+        with contextlib.closing(requests.Session()) as session:
+            return self.convert_binary_data(
+                _get_teryt_client(session).service.PobierzZmianySimcUrzedowy(
+                    _int_to_datetime(from_version),
+                    _int_to_datetime(target_version)
+                )
+            )
+
+    def _get_serializer(self):
+        return ToFromJsonSerializer(SimcEntry, SimcEntry_pb)
+
+    def current_cache_version(self) -> Version:
+        self.__log.info("Checking current SIMC cache version")
+        with contextlib.closing(requests.Session()) as session:
+            return _date_to_int(_get_teryt_client(session).service.PobierzDateAktualnegoKatSimc())
 
     def _handle_d(self, cache: Cache[SimcEntry], obj: Element):
         """
@@ -962,28 +904,46 @@ class SimcCache(BaseTerytCache):
         'P': _handle_p,
     }
 
-    def _real_version_call(self) -> datetime.date:
-        return _get_teryt_client().service.PobierzDateAktualnegoKatSimc()
-
-    def _get_binary_real_call(self, version: datetime.date):  # TODO: return type
-        self.__log.debug("_get_binary_real_call(version=%s)", version)
-        return _get_teryt_client().service.PobierzKatalogSIMC(version)
-
-    def _get_update_real_call(self, start: datetime.date, end: datetime.date):  # TODO: return type
-        self.__log.debug("_get_update_real_call(start=%s, end=%s)", start, end)
-        return _get_teryt_client().service.PobierzZmianySimcUrzedowy(start, end)
-
 
 @functools.lru_cache(maxsize=1)
 def simc() -> Cache[SimcEntry]:
-    return SimcCache().get()
+    return SimcCache().get_cache()
 
 
 class TerytCache(BaseTerytCache):
     __log = logging.getLogger(__name__ + '.TerytCache')
 
     def __init__(self):
-        super(TerytCache, self).__init__(TERYT_TERYT_DB, TercEntry, TercEntry_pb)
+        super(TerytCache, self).__init__(TERYT_TERYT_DB, TercEntry)
+
+    def _get_cache_data(self, version: Version) -> typing.Dict[str, TercEntry]:
+        self.__log.info("Downloading TERC version: %s", _int_to_datetime(version))
+        with contextlib.closing(requests.Session()) as session:
+            return self._data_to_dict(
+                self.convert_binary_data(
+                    _get_teryt_client(session).service.PobierzKatalogTERC(_int_to_datetime(version))
+                ),
+                TercEntry
+            )
+
+    def _get_updates(self, from_version: Version, target_version: Version):
+        self.__log.info("Downloading TERC updates from %s to %s", _int_to_datetime(from_version),
+                        _int_to_datetime(target_version))
+        with contextlib.closing(requests.Session()) as session:
+            return self.convert_binary_data(
+                _get_teryt_client(session).service.PobierzZmianyTercUrzedowy(
+                    _int_to_datetime(from_version),
+                    _int_to_datetime(target_version)
+                )
+            )
+
+    def _get_serializer(self):
+        return ToFromJsonSerializer(TercEntry, TercEntry_pb)
+
+    def current_cache_version(self) -> Version:
+        self.__log.info("Checking current TERC cache version")
+        with contextlib.closing(requests.Session()) as session:
+            return _date_to_int(_get_teryt_client(session).service.PobierzDateAktualnegoKatTerc())
 
     def _handle_d(self, cache: Cache[TercEntry], obj: Element):
         """
@@ -1034,26 +994,52 @@ class TerytCache(BaseTerytCache):
         'M': _handle_m,
     }
 
-    def _real_version_call(self) -> datetime.date:
-        return _get_teryt_client().service.PobierzDateAktualnegoKatTerc()
-
-    def _get_binary_real_call(self, version: datetime.date):  # TODO: return type
-        return _get_teryt_client().service.PobierzKatalogTERC(version)
-
-    def _get_update_real_call(self, start: datetime.date, end: datetime.date):  # TODO: return type
-        return _get_teryt_client().service.PobierzZmianyTercUrzedowy(start, end)
 
 
 @functools.lru_cache(maxsize=1)
 def teryt() -> Cache[TercEntry]:
-    return TerytCache().get(allow_stale=True)
+    return TerytCache().get_cache(allow_stale=True)
 
 
 class UlicCache(BaseTerytCache):
     __log = logging.getLogger(__name__ + '.UlicCache')
 
     def __init__(self):
-        super(UlicCache, self).__init__(TERYT_ULIC_DB, UlicMultiEntry, UlicMultiEntry_pb)
+        super(UlicCache, self).__init__(TERYT_ULIC_DB, UlicMultiEntry)
+
+    def _get_cache_data(self, version: Version) -> typing.Dict[str, UlicMultiEntry]:
+        self.__log.info("Downloading SIMC version %s", _int_to_datetime(version))
+        with contextlib.closing(requests.Session()) as session:
+            tree = ET.fromstring(
+                self.convert_binary_data(
+                    _get_teryt_client(session).service.PobierzKatalogULIC(_int_to_datetime(version))
+                )
+            )
+            grouped = groupby(
+                    (UlicEntry(_row_as_dict(x)) for x in tree.find('catalog').iter('row')),
+                    lambda x: x.sym_ul
+            )
+
+            return dict((key, UlicMultiEntry.from_list(value)) for key, value in grouped.items())
+
+    def _get_updates(self, from_version: Version, target_version: Version):
+        self.__log.info("Downloading SIMC updates from %s to %s", _int_to_datetime(from_version),
+                        _int_to_datetime(target_version))
+        with contextlib.closing(requests.Session()) as session:
+            return self.convert_binary_data(
+                _get_teryt_client(session).service.PobierzZmianyUlicUrzedowy(
+                    _int_to_datetime(from_version),
+                    _int_to_datetime(target_version)
+                )
+            )
+
+    def _get_serializer(self):
+        return ToFromJsonSerializer(UlicMultiEntry, UlicMultiEntry_pb)
+
+    def current_cache_version(self) -> Version:
+        self.__log.info("Checking current ULIC cache version")
+        with contextlib.closing(requests.Session()) as session:
+            return _date_to_int(_get_teryt_client(session).service.PobierzDateAktualnegoKatUlic())
 
     def _handle_d(self, cache: Cache[UlicMultiEntry], obj: Element):
         """
@@ -1162,23 +1148,10 @@ class UlicCache(BaseTerytCache):
         'Z': _handle_z,
     }
 
-    def _real_version_call(self) -> datetime.date:
-        return _get_teryt_client().service.PobierzDateAktualnegoKatUlic()
-
-    def _get_binary_real_call(self, version: datetime.date):  # TODO: return type
-        return _get_teryt_client().service.PobierzKatalogULIC(version)
-
-    def _get_update_real_call(self, start: datetime.date, end: datetime.date):  # TODO: return type
-        return _get_teryt_client().service.PobierzZmianyUlicUrzedowy(start, end)
-
-    def _data_to_cache_contents(self, data: bytes):
-        grouped = groupby(_get_dict(data, UlicEntry), lambda x: x.sym_ul)
-        return dict((key, UlicMultiEntry.from_list(value)) for key, value in grouped.items())
-
 
 @functools.lru_cache(maxsize=1)
 def ulic() -> Cache[UlicMultiEntry]:
-    return UlicCache().get()
+    return UlicCache().get_cache()
 
 
 def init():
@@ -1189,9 +1162,9 @@ def init():
 
 
 def update():
-    TerytCache().get()
-    SimcCache().get()
-    UlicCache().get()
+    TerytCache().get_cache()
+    SimcCache().get_cache()
+    UlicCache().get_cache()
 
 
 def verify():

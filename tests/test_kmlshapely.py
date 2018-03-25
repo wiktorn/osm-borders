@@ -5,7 +5,7 @@ import shapely.geometry
 
 import converters.kmlshapely
 
-logging.basicConfig(level=10)
+logging.basicConfig(level=logging.INFO)
 
 
 class KmlShapelyTests(unittest.TestCase):

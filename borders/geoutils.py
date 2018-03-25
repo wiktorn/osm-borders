@@ -7,6 +7,7 @@ import logging
 
 __log = logging.getLogger(__name__)
 
+
 def get_raw_geometries(obj: shapely.geometry.base.BaseGeometry) -> typing.List[shapely.geometry.base.BaseGeometry]:
     if not obj.is_empty and isinstance(obj, shapely.geometry.base.BaseMultipartGeometry):
         return [x for x in obj.geoms]

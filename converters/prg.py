@@ -17,10 +17,11 @@ import requests
 import time
 import tqdm
 
-from .tools import get_cache_manager, Serializer
+from converters.tools import Version, VersionedCache, T, Serializer
 
-__GMINY_CACHE_NAME = 'osm_prg_gminy_v1'
-__WOJEWODZTWA_CACHE_NAME = 'osm_prg_wojewodztwa_v1'
+_GMINY_CACHE_NAME = 'osm_prg_gminy_v1'
+_POWIATY_CACHE_NAME = 'osm_prg_powiaty_v1'
+_WOJEWODZTWA_CACHE_NAME = 'osm_prg_wojewodztwa_v1'
 
 
 class GeoSerializer(Serializer):
@@ -31,42 +32,57 @@ class GeoSerializer(Serializer):
         return geobuf.encode(dct)
 
 
-def gminy():
-    return get_cache_manager().get_cache(__GMINY_CACHE_NAME,
-                                         version=get_prg_filename()[1],
-                                         serializer=GeoSerializer())
+class BasePrgCache(VersionedCache):
+    """
+    Class for caching PRG borders. All borders are stored as GeoJSON dicts
+    """
+    __log = logging.getLogger(__name__ + '.BasePrgCache')
+    change_handlers = dict()
+
+    def _get_cache_data(self, version: Version) -> typing.Dict[str, T]:
+        raise NotImplementedError
+
+    def _get_serializer(self):
+        return GeoSerializer()
+
+    def current_cache_version(self) -> Version:
+        return get_prg_filename()[1]
+
+    def update_cache(self, from_version: Version, target_version: Version):
+        return self.create_cache(target_version)
 
 
-def wojewodztwa():
-    return get_cache_manager().get_cache(__WOJEWODZTWA_CACHE_NAME,
-                                         version=get_prg_filename()[1],
-                                         serializer=GeoSerializer())
+class GminyCache(BasePrgCache):
+    def __init__(self):
+        super(GminyCache, self).__init__(_GMINY_CACHE_NAME, dict)
+
+    def _get_cache_data(self, version: Version) -> typing.Dict[str, dict]:
+        return get_layer('gminy', 'jpt_kod_je')
 
 
-def init():
-    cm = get_cache_manager()
+class PowiatyCache(BasePrgCache):
+    def __init__(self):
+        super(PowiatyCache, self).__init__(_POWIATY_CACHE_NAME, dict)
 
-    foo, version = get_prg_filename()
-    gminy = cm.create_cache(__GMINY_CACHE_NAME, serializer=GeoSerializer())
-    gminy.reload(get_layer('gminy', 'jpt_kod_je'))
-    cm.mark_ready(__GMINY_CACHE_NAME, version)
+    def _get_cache_data(self, version: Version) -> typing.Dict[str, dict]:
+        return get_layer('powiaty', 'jpt_kod_je')
 
-    # wojewodztwa = cm.create_cache(__WOJEWODZTWA_CACHE_NAME)
-    # wojewodztwa.reload(get_layer('województwa', 'jpt_kod_je'))
-    # cm.mark_ready(__WOJEWODZTWA_CACHE_NAME)
+
+class WojewodztwaCache(BasePrgCache):
+    def __init__(self):
+        super(WojewodztwaCache, self).__init__(_WOJEWODZTWA_CACHE_NAME, dict)
+
+    def _get_cache_data(self, version: Version) -> typing.Dict[str, dict]:
+        return get_layer('województwa', 'jpt_kod_je')
 
 
 __log = logging.getLogger(__name__)
 
 
-@functools.lru_cache(maxsize=1)
-def get_prg_filename() -> typing.Tuple[str, int]:
-    #resp = requests.get("http://www.codgik.gov.pl/index.php/darmowe-dane/prg.html")
-    resp = requests.get("http://www.gugik.gov.pl/geodezja-i-kartografia/pzgik/dane-bez-oplat/dane-z-panstwowego-rejestru-granic-i-powierzchni-jednostek-podzialow-terytorialnych-kraju-prg")
-    soup = bs4.BeautifulSoup(resp.text, "html.parser")
-    link = soup.find("a", text="*PRG – jednostki administracyjne")
-    version = link.parent.parent.parent.parent.find_all('td')[-1].text
-    return link.get('href'), calendar.timegm(time.strptime(version, '%d-%m-%Y'))
+def init():
+    GminyCache().create_cache()
+    PowiatyCache().create_cache()
+    WojewodztwaCache().create_cache()
 
 
 class TqdmUpTo(tqdm.tqdm):
@@ -75,18 +91,28 @@ class TqdmUpTo(tqdm.tqdm):
             self.total = tsize
         self.update(b*bsize - self.n)
 
+
+@functools.lru_cache(maxsize=1)
+def get_prg_filename() -> typing.Tuple[str, int]:
+    resp = requests.get("http://www.gugik.gov.pl/geodezja-i-kartografia/pzgik/dane-bez-oplat/"
+                        "dane-z-panstwowego-rejestru-granic-i-powierzchni-jednostek-podzialow-terytorialnych-kraju-prg")
+    soup = bs4.BeautifulSoup(resp.text, "html.parser")
+    link = soup.find("a", text="*PRG – jednostki administracyjne")
+    version = link.parent.parent.parent.parent.find_all('td')[-1].text
+    return link.get('href'), calendar.timegm(time.strptime(version, '%d-%m-%Y'))
+
+
 @functools.lru_cache(maxsize=1)
 def download_prg_file() -> str:
-    #return "/tmp/prgxbdnufnb/prg_file.zip"
-    dir = tempfile.mkdtemp(prefix="prg")
-    fname = os.path.join(dir, 'prg_file.zip')
+    path = tempfile.mkdtemp(prefix="prg")
+    file_name = os.path.join(path, 'prg_file.zip')
     __log.info("Downloading PRG archive")
     url, version = get_prg_filename()
     with TqdmUpTo(unit='B', unit_scale=True, miniters=1, desc=url) as t:
-        urllib.request.urlretrieve(url, filename=fname, reporthook=t.update_to)
+        urllib.request.urlretrieve(url, filename=file_name, reporthook=t.update_to)
     __log.info("Downloading PRG archive - done")
-    atexit.register(shutil.rmtree, dir)
-    return fname
+    atexit.register(shutil.rmtree, path)
+    return file_name
 
 
 def project(transform, geojson: dict) -> dict:
@@ -108,15 +134,16 @@ def project(transform, geojson: dict) -> dict:
 
 def process_layer(layer_name: str, key: str, filepath: str) -> typing.Dict[str, dict]:
     with zipfile.ZipFile(filepath, 'r') as zfile:
-        dirnames = set([os.path.dirname(x.filename) for x in zfile.infolist() if x.filename.endswith('.shp')])
-    if len(dirnames) != 1:
-        raise ValueError("Can't guess the directory inside zipfile. Candidates: {0}".format(", ".join(dirnames)))
+        dir_names = set([os.path.dirname(x.filename) for x in zfile.infolist() if x.filename.endswith('.shp')])
+    if len(dir_names) != 1:
+        raise ValueError("Can't guess the directory inside zipfile. Candidates: {0}".format(", ".join(dir_names)))
 
     with fiona.drivers():
-        dirname = "/" + dirnames.pop()
+        dir_name = "/" + dir_names.pop()
         __log.info("Converting PRG data")
-        with fiona.open(path=dirname, vfs="zip://" + filepath, layer=layer_name, mode="r", encoding='cp1250') as data:
+        with fiona.open(path=dir_name, vfs="zip://" + filepath, layer=layer_name, mode="r", encoding='cp1250') as data:
             transform = functools.partial(pyproj.transform, pyproj.Proj(data.crs), pyproj.Proj(init="epsg:4326"))
+            __log.info("Converting PRG data")
             rv = dict(
                 (x['properties'][key], project(transform, x)) for x in tqdm.tqdm(data)
             )
@@ -125,6 +152,5 @@ def process_layer(layer_name: str, key: str, filepath: str) -> typing.Dict[str, 
 
 
 def get_layer(layer_name: str, key: str) -> typing.Dict[str, dict]:
-    localfile = download_prg_file()
-    return process_layer(layer_name, key, localfile)
-
+    local_file = download_prg_file()
+    return process_layer(layer_name, key, local_file)

@@ -15,14 +15,14 @@ from borders.geoutils import split_by_common_ways
 from borders.wikidata import fetch_from_wikidata, WikidataSimcEntry
 from converters.feature import ImmutableFeature, Feature
 from converters.kmlshapely import kml_to_shapely
-from converters.prg import gminy
+from converters.prg import GminyCache
 from converters.teryt import simc as SIMC_DICT
 
 __log = logging.getLogger(__name__)
 
 @cachetools.func.ttl_cache(maxsize=128, ttl=600)
 def get_adm_border(terc: str) -> shapely.geometry.base.BaseGeometry:
-    GMINY_DICT = gminy()
+    GMINY_DICT = GminyCache().get_cache()
     geojson = GMINY_DICT[terc]
     if geojson:
         return shapely.geometry.shape(geojson['geometry'])
@@ -47,6 +47,8 @@ def divide_bbox(bbox: TYPE_BBOX) -> typing.List[TYPE_BBOX]:
     __PRECISION = 1000000
     __MAX_BBOX_X = int(0.03 * __PRECISION)
     __MAX_BBOX_Y = int(0.04 * __PRECISION)
+    # false positive on range(math.flor(..))
+    # noinspection PyTypeChecker
     rv = [
         (x / __PRECISION,
          y / __PRECISION,
@@ -96,7 +98,7 @@ def fetch_from_emuia(bbox: TYPE_BBOX) -> typing.List[Feature]:
 
 
 def get_borders(terc: str,
-                filter:  typing.Callable[[Feature, ], bool] = lambda x: True,
+                filter_func:  typing.Callable[[Feature, ], bool] = lambda x: True,
                 borders_mapping: typing.Callable[[typing.List[Feature], ], typing.List[Feature]] = split_by_common_ways,
                 do_clean_borders: bool = True) -> bytes:
     adm_bound = get_adm_border(terc)
@@ -112,15 +114,29 @@ def get_borders(terc: str,
         # ignore any exceptions
         __log.warning("Exception during fetch from Wikidata: {0}", e, exc_info=(type(e), e, e.__traceback__))
     __log.info("Processing data")
-    return process(adm_bound = adm_bound,
-                   borders = borders,
-                   filter = filter,
+    return process(adm_bound=adm_bound,
+                   borders=borders,
+                   filter_func=filter_func,
                    borders_mapping=borders_mapping,
                    wikidata=wikidata,
                    do_clean_borders=do_clean_borders)
 
 
 def clean_borders(borders: typing.List[Feature], do_clean: bool = True) -> None:
+    """
+    :param borders:  borders to process
+    :param do_clean: do the changes
+
+    Checks borders against EMUiA and SIMC data.
+
+    This does few things:
+    1. Sets border admin_level value
+    2. Adds fixme to border tags if there are some discrepancies
+
+    And if do_clean is set to True:
+    3. If moving border from admin_level=10 to 8, remove the area from parent
+    4. If moving border from admin_level=8 to 10, then join the area to the parent
+    """
     for border in borders:
         simc_code = border.tags.get('TERYT_MIEJSCOWOSCI')
         parent_id = border.tags.get('IDENTYFIKATOR_NADRZEDNEJ')
@@ -197,13 +213,12 @@ def add_wikidata(wikidata: typing.List[WikidataSimcEntry], borders: typing.List[
     todo = list(borders)
     border_iter = itertools.cycle(todo)
 
-    def update_border(entry, border):
-        entry = candidates[0]
+    def update_border(entry, border_to_update):
         rest.remove(entry)
-        border.tags['wikidata'] = entry.wikidata
-        border.tags['wikipedia'] = entry.wikipedia
-        if not border.tags['NAZWA'] in entry.miejscowosc:
-            border.tags['fixme'] = "Check Wikipedia/Wikidata tags. In Wikipedia name is: {0}".format(
+        border_to_update.tags['wikidata'] = entry.wikidata
+        border_to_update.tags['wikipedia'] = entry.wikipedia
+        if not border_to_update.tags['NAZWA'] in entry.miejscowosc:
+            border_to_update.tags['fixme'] = "Check Wikipedia/Wikidata tags. In Wikipedia name is: {0}".format(
                 entry.miejscowosc)
 
     loop_limit = 100
@@ -237,10 +252,9 @@ def add_wikidata(wikidata: typing.List[WikidataSimcEntry], borders: typing.List[
                                 update_border(candidates[0], border)
 
 
-
 def process(adm_bound: shapely.geometry.base.BaseGeometry,
             borders: typing.List[Feature],
-            filter: typing.Callable[[Feature, ], bool] = lambda x: True,
+            filter_func: typing.Callable[[Feature, ], bool] = lambda x: True,
             borders_mapping: typing.Callable[[typing.List[Feature], ],
                                              typing.List[Feature]] = split_by_common_ways,
             wikidata: typing.List[WikidataSimcEntry] = None,
@@ -249,9 +263,10 @@ def process(adm_bound: shapely.geometry.base.BaseGeometry,
 
     :param adm_bound: shape of the area that one should work on
     :param borders: list of features to process
-    :param filter: output filtering function
+    :param filter_func: output filtering function
     :param borders_mapping: function that converts all the features
     :param wikidata: wikidata information for this municipiality
+    :param do_clean_borders:
     :return:
     """
     adm_bound = adm_bound.buffer(0.005)  # ~ 500m along meridian
@@ -288,7 +303,6 @@ def process(adm_bound: shapely.geometry.base.BaseGeometry,
         else:
             border.geometry = border.geometry.boundary
 
-
     def tag_mapping(obj_type: str, tags: typing.Dict[str, str]) -> typing.Generator[typing.Tuple[str, str], None, None]:
         if obj_type == "relation":
             yield ('boundary', 'administrative')
@@ -312,7 +326,7 @@ def process(adm_bound: shapely.geometry.base.BaseGeometry,
 
     def default_filter(feature: Feature) -> bool:
         if feature.geometry.within(adm_bound):
-            if filter(feature):
+            if filter_func(feature):
                 return True
             else:
                 __log.debug("Filter function refused border: {0}".format(feature))
@@ -322,7 +336,7 @@ def process(adm_bound: shapely.geometry.base.BaseGeometry,
 
     converter = FeatureToOsm(borders = borders,
                              tag_mapping= tag_mapping,
-                             filter=default_filter,
+                             filter_func=default_filter,
                              borders_mapping = borders_mapping)
     return converter.tostring()
 
@@ -333,7 +347,7 @@ class FeatureToOsm:
     def __init__(self,
                  borders: typing.List[Feature],
                  tag_mapping: typing.Callable[[str, typing.Dict[str, str]], typing.Generator] = lambda x, y: y,
-                 filter: typing.Callable[[Feature], bool] = lambda x: True,
+                 filter_func: typing.Callable[[Feature], bool] = lambda x: True,
                  borders_mapping: typing.Callable[[typing.List[Feature], ], typing.List[Feature]] = split_by_common_ways
                  ):
         self.__object_store = {
@@ -344,7 +358,7 @@ class FeatureToOsm:
         self.id_ = itertools.count(-1, -1)
         self.borders = borders
         self.tag_mapping = tag_mapping
-        self.filter = filter
+        self.filter = filter_func
         self.borders_mapping = borders_mapping
 
     def tostring(self) -> bytes:
@@ -437,7 +451,7 @@ class FeatureToOsm:
 
 
 def gminy_prg_as_osm(terc: str):
-    GMINY_DICT = gminy()
+    GMINY_DICT = GminyCache().get_cache()
     borders = [Feature.from_geojson(GMINY_DICT[x]) for x in GMINY_DICT.keys() if x.startswith(terc)]
 
     for x in borders:

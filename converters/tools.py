@@ -13,6 +13,7 @@ import tqdm
 from google.protobuf import message
 from google.protobuf.descriptor import FieldDescriptor
 
+
 T = typing.TypeVar('T')
 
 
@@ -81,6 +82,94 @@ class Cache(typing.Generic[T]):
         raise NotImplementedError
 
 
+Version = typing.NewType('Version', int)
+
+
+class VersionedCache(typing.Generic[T]):
+    """
+    Class that keeps cache updated automatically. Also - initializes cache automatically if not already created
+    """
+    __log = logging.getLogger(__name__)
+
+    def __init__(self, path: str, entry_class: T):
+        self.path = path
+        self.version_ttl = 0
+        self.entry_class = entry_class
+
+    def _get_cache_data(self, version: Version) -> typing.Dict[str, T]:
+        raise NotImplementedError
+
+    def _get_serializer(self):
+        raise NotImplementedError
+
+    def current_cache_version(self) -> Version:
+        raise NotImplementedError
+
+    def update_cache(self, from_version: Version, target_version: Version):
+        raise NotImplementedError
+
+    def file_cache_version(self) -> Version:
+        return get_cache_manager().version(self.path)
+
+    def _get_cache(self, cache_version: Version = None) -> Cache[T]:
+        if cache_version:
+            return get_cache_manager().get_cache(
+                self.path,
+                version=cache_version,
+                serializer=self._get_serializer()
+            )
+        return get_cache_manager().get_cache(
+            self.path,
+            serializer=self._get_serializer()
+        )
+
+    def get_cache(self, allow_stale: bool = False, version: int = None) -> Cache[T]:
+        if not version:
+            version = self.current_cache_version()
+        try:
+            return self._get_cache(version)
+        except CacheExpired:
+            if allow_stale:
+                self.__log.warning("Using stale version (%s) of cache %s. Consider updating.",
+                                   self.file_cache_version(),
+                                   self.path)
+                return self._get_cache(cache_version=-1)
+            self.update_cache(self.file_cache_version(), version)
+            self.mark_ready(version)
+            return self.get_cache(allow_stale=allow_stale, version=version)
+        except CacheNotInitialized:
+            self.create_cache()
+            return self.get_cache(allow_stale=allow_stale, version=version)
+
+    def create_cache(self, version: Version = None, data=None):
+        if not version:
+            version = self.current_cache_version()
+        if not data:
+            data = self._get_cache_data(version)
+        # with open("/tmp/test_data_{}_{}".format(self.path, version), "wb+") as f:
+        #    f.write(data)
+        cache = get_cache_manager().create_cache(self.path, serializer=self._get_serializer())
+        cache.reload(data)
+        self.mark_ready(version)
+        self.__log.info("%s dictionary created", self.path)
+
+    def verify(self):
+        cache = self._get_cache(cache_version=-1)
+        errors = 0
+        for key, value in tqdm.tqdm(self._get_cache_data(self.file_cache_version()).items()):
+            cache_entry = cache.get(key)
+            if not cache_entry == value:
+                self.__log.warning(
+                    "Elements doesn't match: (original) {} != {} (cache)".format(str(value), str(cache_entry)))
+                errors += 1
+        if errors > 0:
+            self.__log.error("Total mismatched elements: {}".format(errors))
+            raise ValueError("Some elements didn't match")
+
+    def mark_ready(self, version: Version):
+        get_cache_manager().mark_ready(self.path, version)
+
+
 class CacheDriver:
     def get_table(self, name: str, serializer: Serializer = JsonSerializer()) -> Cache:
         raise NotImplementedError
@@ -111,8 +200,8 @@ class ShelveCache(Cache):
     def delete(self, name: str):
         del self.shelve[name]
 
-    def keys(self):
-        self.shelve.keys()
+    def keys(self) -> typing.Iterable:
+        return self.shelve.keys()
 
 
 class ShelveCacheDriver(CacheDriver):
@@ -204,7 +293,7 @@ class DynamoCache(Cache):
                 'WriteCapacityUnits': capacity
             })
 
-    def keys(self):
+    def keys(self) -> typing.Iterable:
         ret = self._table.scan(
             ProjectionExpression='#k',
             ExpressionAttributeNames={
@@ -397,35 +486,38 @@ TYPE_CALLABLE_MAP[FieldDescriptor.TYPE_MESSAGE] = protobuf_to_dict
 # escaped split / join
 
 
-def split(input: str, delimeter: str = ',', escape_char: str = '\\') -> typing.List[str]:
+def split(s: str, delimeter: str = ',', escape_char: str = '\\') -> typing.List[str]:
     ret = []
     n = 0
     start = 0
 
     def add_segment(s: str):
-        ret.add(s.
-                replace(escape_char+delimeter, delimeter).
-                replace(escape_char+escape_char, escape_char)
-                )
+        ret.append(
+            s.
+            replace(escape_char + delimeter, delimeter).
+            replace(escape_char + escape_char, escape_char)
+        )
 
-    while n < len(input):
+    while n < len(s):
         read_escape_char = False
-        if input[n] == escape_char:
+        if s[n] == escape_char:
             read_escape_char = True
             n += 1
-        if not read_escape_char and input[n] == delimeter:
-            add_segment(input[start:n-1])
+        if not read_escape_char and s[n] == delimeter:
+            add_segment(s[start:n - 1])
             start = n + 1
-    add_segment(input[start:])
+    add_segment(s[start:])
     return ret
 
 
-def join(input: typing.List[str], delimeter: str = ',', escape_char: str = '\\') -> str:
+def join(lst: typing.List[str], delimeter: str = ',', escape_char: str = '\\') -> str:
     return delimeter.join(
         map(
-            lambda x: x.
-                replace(escape_char, escape_char + escape_char).
+            lambda x:
+                x.replace(escape_char, escape_char + escape_char).
                 replace(delimeter, escape_char + delimeter),
-            input
+            lst
         )
     )
+
+

@@ -5,7 +5,7 @@ from borders.borders import get_borders
 
 
 def fetch(args):
-    args.output.write(get_borders(args.terc[0], filter=lambda x: x.tags.get('admin_level') == "8"))
+    args.output.write(get_borders(args.terc[0], filter_func=lambda x: x.tags.get('admin_level') == "8"))
 
 
 def init(args):

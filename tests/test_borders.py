@@ -14,7 +14,7 @@ from borders.geoutils import split_intersec
 from converters.kmlshapely import kml_to_shapely
 from converters.overpyshapely import OverToShape
 
-logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(level=logging.INFO)
 
 
 class BorderTests(unittest.TestCase):

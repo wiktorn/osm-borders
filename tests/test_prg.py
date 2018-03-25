@@ -5,9 +5,9 @@ import unittest
 import shapely.geometry
 
 import converters.prg
-from converters.tools import CachedDictionary
 
-logging.basicConfig(level=logging.DEBUG)
+
+logging.basicConfig(level=logging.INFO)
 
 
 class PrgTests(unittest.TestCase):
@@ -15,10 +15,6 @@ class PrgTests(unittest.TestCase):
         rv = converters.prg.process_layer('województwa', 'jpt_kod_je', 'woj_jedn_adm.zip')
         self._test_woj_contents(rv)
 
-    def test_cached_dict(self):
-        func = functools.partial(converters.prg.process_layer, 'województwa', 'jpt_kod_je', 'woj_jedn_adm.zip')
-        rv = CachedDictionary("test_osm_prg_wojewodztwa_v1", func)
-        self._test_woj_contents(rv)
 
     def _test_woj_contents(self, rv):
         self.assertEqual(rv['02']['properties']['jpt_nazwa_'], 'dolnośląskie')
@@ -40,3 +36,21 @@ class PrgTests(unittest.TestCase):
         center = shapely.geometry.shape(rv['02']['geometry']).centroid
         self.assertAlmostEqual(center.x, 16.4106, delta=0.1)
         self.assertAlmostEqual(center.y, 51.0895, delta=0.1)
+
+    def test_get_gminy(self):
+        self.assertEqual(
+            "Brodnica",
+            converters.prg.GminyCache().get_cache().get('0402011')['properties']['jpt_nazwa_']
+        )
+
+    def test_get_powiat(self):
+        self.assertEqual(
+            "brodnicki",
+            converters.prg.PowiatyCache().get_cache().get('0402')['properties']['jpt_nazwa_']
+        )
+
+    def test_get_wojewodztwo(self):
+        self.assertEqual(
+            "kujawsko-pomorskie",
+            converters.prg.WojewodztwaCache().get_cache().get('04')['properties']['jpt_nazwa_']
+        )

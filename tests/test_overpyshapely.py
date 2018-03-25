@@ -8,7 +8,7 @@ import shapely.geometry
 
 import converters.overpyshapely
 
-logging.basicConfig(level=10)
+logging.basicConfig(level=logging.INFO)
 
 
 class OverpyShapely(unittest.TestCase):
