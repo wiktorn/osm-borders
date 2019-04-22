@@ -1,125 +1,28 @@
+import logging
 import os
-from functools import wraps
 from xml.sax.saxutils import quoteattr
-
-import time
 
 from flask import Flask, make_response as _make_response
 from flask import request, redirect, url_for, render_template
-from flask_lambda import FlaskLambda
 
 import borders.borders
-from converters import teryt, tools
-
-import logging
+from converters import teryt
 
 PRG_GMINY_CACHE_V_ = 'osm_prg_gminy_cache_v1'
 
 logger = logging.getLogger(__name__)
 
-if os.environ.get('USE_AWS'):
-    app = FlaskLambda(__name__)
-    import boto3
-    import lz4
+logger.info("Working in standard rest-server mode")
+app = Flask(__name__)
 
 
-    def make_response(ret, code):
-        resp = _make_response(ret, code)
-        resp.mimetype = 'text/xml; charset=utf-8'
-        return resp
-
-
-    def dynamo_cache(*, table_name: str, cache_key: str, cache_bucket: str, ttl: int = 86400):
-        cache_table = boto3.resource('dynamodb').Table(table_name)
-
-        def decorating_function(user_function):
-            @wraps(user_function)
-            def wrapper(*args, **kwargs):
-                logger.error("Start dynamo cache")
-                key = kwargs[cache_key]
-                ret = cache_table.get_item(
-                    Key={
-                        'key': tools.join([key, cache_bucket])
-                    }
-                )
-                if ret and 'Item' in ret and ret['Item']['ttl'] > time.time() and ret['Item'].get('value'):
-                    logger.error("Return from table")
-                    return lz4.decompress(ret['Item']['value'].value)
-
-                if ret.get('Item') and not ret['Item'].get('value'):
-                    logger.error("Sleeping waiting for data")
-                    time_slept = 0
-                    while True:
-                        time.sleep(5)
-                        time_slept += 5
-                        ret = cache_table.get_item(
-                            Key={
-                                'key': tools.join([key, cache_bucket])
-                            }
-                        )
-                        if ret and 'Item' in ret \
-                                and ret['Item']['ttl'] > time.time() \
-                                and ret['Item'].get('value'):
-                            logger.error("Found data in table")
-                            return lz4.decompress(ret['Item']['value'].value)
-                        if time_slept > 240:
-                            cache_table.delete_item(
-                                Key={
-                                    'key': tools.join([key, cache_bucket]),
-                                }
-                            )
-                            logger.error("Giving up on waiting for data - removing sentinel object")
-                            raise TimeoutError()
-                # create sentinel item in cache
-                logger.error("Puting sentinel object")
-                cache_table.put_item(
-                    Item={
-                        'key': tools.join([key, cache_bucket]),
-                        'ttl': int(time.time()) + 300
-                    }
-                )
-                logger.error("Calling function")
-                ret = user_function(*args, **kwargs)
-                logger.error("Function returned")
-                cache_table.put_item(
-                    Item={
-                        'key': tools.join([key, cache_bucket]),
-                        'value': lz4.block.compress(ret, mode='high_compression'),
-                        'ttl': int(time.time()) + ttl
-                    }
-
-                )
-                logger.error("Putting response to cache")
-                return ret
-
-            return wrapper
-
-        return decorating_function
-
-else:
-    logger.info("Working in standard rest-server mode")
-    app = Flask(__name__)
-
-
-    def make_response(ret, code):
-        resp = _make_response(ret, code)
-        resp.mimetype = 'text/xml; charset=utf-8'
-        return resp
-
-
-    def dynamo_cache(*, table_name: str, cache_key: str, cache_bucket: str, ttl: int = 86400):
-        def decorating_function(user_function):
-            @wraps(user_function)
-            def wrapper(*args, **kwargs):
-                return user_function(*args, **kwargs)
-
-            return wrapper
-
-        return decorating_function
+def make_response(ret, code):
+    resp = _make_response(ret, code)
+    resp.mimetype = 'text/xml; charset=utf-8'
+    return resp
 
 
 @app.route("/osm-borders/all/<terc>.osm", methods=["GET", ])
-@dynamo_cache(table_name=PRG_GMINY_CACHE_V_, cache_key='terc', cache_bucket='all_borders')
 def get_all_borders(*, terc):
     resp = make_response(borders.borders.get_borders(terc), 200)
     resp.headers['Content-Disposition'] = 'attachment; filename={0}.osm'.format(terc)
@@ -127,7 +30,6 @@ def get_all_borders(*, terc):
 
 
 @app.route("/osm-borders/nosplit/<terc>.osm", methods=["GET", ])
-@dynamo_cache(table_name=PRG_GMINY_CACHE_V_, cache_key='terc', cache_bucket='nosplit_borders')
 def get_nosplit_borders(*, terc):
     resp = make_response(borders.borders.get_borders(terc, borders_mapping=lambda x: x, do_clean_borders=False), 200)
     resp.headers['Content-Disposition'] = 'attachment; filename={0}.osm'.format(terc)
@@ -140,7 +42,6 @@ def error(stuff):
 
 
 @app.route("/osm-borders/<terc>.osm", methods=["GET", ])
-@dynamo_cache(table_name=PRG_GMINY_CACHE_V_, cache_key='terc', cache_bucket='lvl8_borders')
 def get_lvl8_borders(*, terc):
     brd = borders.borders.get_borders(terc, lambda x: x.tags.get('admin_level') == "8")
     resp = make_response(brd, 200)
@@ -149,7 +50,6 @@ def get_lvl8_borders(*, terc):
 
 
 @app.route("/osm-borders/prg/gminy/<terc>.osm", methods=["GET", ])
-@dynamo_cache(table_name=PRG_GMINY_CACHE_V_, cache_key='terc', cache_bucket='gminy')
 def get_gminy(*, terc):
     resp = make_response(borders.borders.gminy_prg_as_osm(terc), 200)
     resp.headers['Content-Disposition'] = 'attachment; filename={0}-gminy.osm'.format(terc)

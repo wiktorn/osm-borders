@@ -46,7 +46,7 @@ class BasePrgCache(VersionedCache[T]):
         return GeoSerializer()
 
     def current_cache_version(self) -> Version:
-        return get_prg_filename()[1]
+        return Version(get_prg_filename()[1])
 
     def update_cache(self, from_version: Version, target_version: Version):
         return self.create_cache(target_version)
@@ -57,7 +57,7 @@ class GminyCache(BasePrgCache[typing.Dict]):
         super(GminyCache, self).__init__(_GMINY_CACHE_NAME)
 
     def _get_cache_data(self, version: Version) -> typing.Dict[str, dict]:
-        return get_layer('gminy', 'jpt_kod_je')
+        return get_layer('gminy', 'JPT_KOD_JE')
 
 
 class PowiatyCache(BasePrgCache[typing.Dict]):
@@ -65,7 +65,7 @@ class PowiatyCache(BasePrgCache[typing.Dict]):
         super(PowiatyCache, self).__init__(_POWIATY_CACHE_NAME)
 
     def _get_cache_data(self, version: Version) -> typing.Dict[str, dict]:
-        return get_layer('powiaty', 'jpt_kod_je')
+        return get_layer('powiaty', 'JPT_KOD_JE')
 
 
 class WojewodztwaCache(BasePrgCache[typing.Dict]):
@@ -73,7 +73,7 @@ class WojewodztwaCache(BasePrgCache[typing.Dict]):
         super(WojewodztwaCache, self).__init__(_WOJEWODZTWA_CACHE_NAME)
 
     def _get_cache_data(self, version: Version) -> typing.Dict[str, dict]:
-        return get_layer('województwa', 'jpt_kod_je')
+        return get_layer('województwa', 'JPT_KOD_JE')
 
 
 __log = logging.getLogger(__name__)
