@@ -142,7 +142,7 @@ def process_layer(layer_name: str, key: str, filepath: str) -> typing.Dict[str, 
     with fiona.drivers():
         dir_name = "/" + dir_names.pop()
         __log.info("Converting PRG data")
-        with fiona.open(path=dir_name, vfs="zip://" + filepath, layer=layer_name, mode="r", encoding='cp1250') as data:
+        with fiona.open(path=dir_name, vfs="zip://" + filepath, layer=layer_name, mode="r", encoding='utf-8') as data:
             transform = functools.partial(pyproj.transform, pyproj.Proj(data.crs), pyproj.Proj(init="epsg:4326"))
             rv = dict(
                 (x['properties'][key], project(transform, x)) for x in tqdm.tqdm(data, desc="Converting PRG data")
