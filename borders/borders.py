@@ -20,6 +20,7 @@ from converters.teryt import simc as SIMC_DICT
 
 __log = logging.getLogger(__name__)
 
+
 @cachetools.func.ttl_cache(maxsize=128, ttl=600)
 def get_adm_border(terc: str) -> shapely.geometry.base.BaseGeometry:
     GMINY_DICT = GminyCache().get_cache()
@@ -66,21 +67,21 @@ def fetch_from_emuia_cached(bbox: TYPE_BBOX) -> str:
     try:
         __log.info("Downloading BBOX: {0} from EMUiA".format(bbox))
         resp = requests.get("http://emuia1.gugik.gov.pl/wmsproxy/emuia/wms",
-                        params={
-                            "FORMAT": "application/vnd.google-earth.kml+xml",
-                            "VERSION": "1.1.1",
-                            "SERVICE": "WMS",
-                            "REQUEST": "GetMap",
-                            # "LAYERS": "emuia:layer_adresy_labels",
-                            "LAYERS": "emuia:layer_miejscowosci_granica",
-                            "STYLES": "",
-                            # "SRS": "EPSG:2180",
-                            "SRS": "EPSG:4326",
-                            "WIDTH": "16000",
-                            "HEIGHT": "16000",
-                            "BBOX": "{0},{1},{2},{3}".format(*bbox)
-                        },
-                        verify=False)
+                            params={
+                                "FORMAT": "application/vnd.google-earth.kml+xml",
+                                "VERSION": "1.1.1",
+                                "SERVICE": "WMS",
+                                "REQUEST": "GetMap",
+                                # "LAYERS": "emuia:layer_adresy_labels",
+                                "LAYERS": "emuia:layer_miejscowosci_granica",
+                                "STYLES": "",
+                                # "SRS": "EPSG:2180",
+                                "SRS": "EPSG:4326",
+                                "WIDTH": "16000",
+                                "HEIGHT": "16000",
+                                "BBOX": "{0},{1},{2},{3}".format(*bbox)
+                            },
+                            verify=False)
     except requests.exceptions.ConnectionError as e:
         raise requests.exceptions.ConnectionError(e.errno if e.errno else -1, "Problem connecting to EMUiA", e)
     try:
@@ -334,10 +335,10 @@ def process(adm_bound: shapely.geometry.base.BaseGeometry,
             __log.debug("Border is outside working area: {0}".format(feature))
         return False
 
-    converter = FeatureToOsm(borders = borders,
-                             tag_mapping= tag_mapping,
+    converter = FeatureToOsm(borders=borders,
+                             tag_mapping=tag_mapping,
                              filter_func=default_filter,
-                             borders_mapping = borders_mapping)
+                             borders_mapping=borders_mapping)
     return converter.tostring()
 
 

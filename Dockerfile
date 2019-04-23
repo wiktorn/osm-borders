@@ -22,10 +22,8 @@ RUN apt-get -y update && \
     && \
     apt-get autoremove -y
 COPY . /app/
-RUN mkdir /output
+RUN mkdir /data /output
 EXPOSE 5002
-VOLUME /data
-VOLUME /output
 ENV TMPDIR=/data
 WORKDIR /output
 ENTRYPOINT ["python", "/app/docker_entrypoint.py"]

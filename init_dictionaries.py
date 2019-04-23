@@ -9,7 +9,6 @@ logging.basicConfig(level=logging.INFO)
 def main():
     converters.teryt.init()
     converters.prg.init()
-    converters.teryt.TerytCache().create_cache()
 
 
 if __name__ == '__main__':
