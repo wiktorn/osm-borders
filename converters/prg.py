@@ -23,11 +23,16 @@ __WGS84 = pyproj.Proj(proj='latlong', datum='WGS84')
 __EPSG2180 = pyproj.Proj(init="epsg:2180")
 
 if hasattr(pyproj, "Transformer"):
-    def get_transformer(from_srs: str, to_srs: str) -> typing.Callable[[typing.Any], typing.Tuple[float, float]]:
-        return pyproj.Transformer.from_proj(from_srs, to_srs).transform
+    def get_transformer(from_srs: typing.Dict[str, str], to_srs: str) -> typing.Callable[[typing.Any], typing.Tuple[float, float]]:
+        transformer = pyproj.Transformer.from_proj(from_srs, to_srs).transform
+
+        def wrapper(*args):
+            return list(reversed(transformer(*args)))
+
+        return wrapper
 else:
-    def get_transformer(from_srs: str, to_srs:str) -> typing.Callable[[typing.Any], typing.Tuple[float, float]]:
-        return functools.partial(pyproj.transform, pyproj.Proj(init=from_srs), pyproj.Proj(init=to_srs))
+    def get_transformer(from_srs: typing.Dict[str, str], to_srs:str) -> typing.Callable[[typing.Any], typing.Tuple[float, float]]:
+        return functools.partial(pyproj.transform, pyproj.Proj(**from_srs), pyproj.Proj(init=to_srs))
 
 
 _GMINY_CACHE_NAME = 'osm_prg_gminy_v1'
@@ -150,10 +155,11 @@ def process_layer(layer_name: str, key: str, filepath: str) -> typing.Dict[str, 
     if len(dir_names) != 1:
         raise ValueError("Can't guess the directory inside zipfile. Candidates: {0}".format(", ".join(dir_names)))
 
-    with fiona.drivers():
-        dir_name = "/" + dir_names.pop()
+    with fiona.Env():
+        dir_name = "/" + dir_names.pop() + "/" if len(dir_names) > 0 else "/"
         __log.info("Converting PRG data")
-        with fiona.open(path=dir_name, vfs="zip://" + filepath, layer=layer_name, mode="r", encoding='utf-8') as data:
+        # with fiona.open(dir_name, vfs="zip://" + filepath, layer=layer_name, mode="r", encoding='utf-8') as data:
+        with fiona.open("zip://" + filepath, layer=layer_name, mode="r", encoding='utf-8') as data:
             transform = get_transformer(data.crs, "epsg:4326")
             rv = dict(
                 (x['properties'][key], project(transform, x)) for x in tqdm.tqdm(data, desc="Converting PRG data")

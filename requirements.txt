@@ -2,7 +2,7 @@ beautifulsoup4
 bs4
 cachetools
 flask
-Fiona==1.7.6
+Fiona>1.8
 geobuf
 gunicorn
 lxml
