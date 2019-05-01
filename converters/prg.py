@@ -19,6 +19,17 @@ import tqdm
 
 from converters.tools import Version, VersionedCache, T, Serializer, synchronized
 
+__WGS84 = pyproj.Proj(proj='latlong', datum='WGS84')
+__EPSG2180 = pyproj.Proj(init="epsg:2180")
+
+if hasattr(pyproj, "Transformer"):
+    def get_transformer(from_srs: str, to_srs: str) -> typing.Callable[[typing.Any], typing.Tuple[float, float]]:
+        return pyproj.Transformer.from_proj(from_srs, to_srs).transform
+else:
+    def get_transformer(from_srs: str, to_srs:str) -> typing.Callable[[typing.Any], typing.Tuple[float, float]]:
+        return functools.partial(pyproj.transform, pyproj.Proj(init=from_srs), pyproj.Proj(init=to_srs))
+
+
 _GMINY_CACHE_NAME = 'osm_prg_gminy_v1'
 _POWIATY_CACHE_NAME = 'osm_prg_powiaty_v1'
 _WOJEWODZTWA_CACHE_NAME = 'osm_prg_wojewodztwa_v1'
@@ -143,7 +154,7 @@ def process_layer(layer_name: str, key: str, filepath: str) -> typing.Dict[str, 
         dir_name = "/" + dir_names.pop()
         __log.info("Converting PRG data")
         with fiona.open(path=dir_name, vfs="zip://" + filepath, layer=layer_name, mode="r", encoding='utf-8') as data:
-            transform = functools.partial(pyproj.transform, pyproj.Proj(data.crs), pyproj.Proj(init="epsg:4326"))
+            transform = get_transformer(data.crs, "epsg:4326")
             rv = dict(
                 (x['properties'][key], project(transform, x)) for x in tqdm.tqdm(data, desc="Converting PRG data")
             )
